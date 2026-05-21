@@ -7,19 +7,29 @@ from src.config import (
     FIELD_HSV_AUTO_FRAMES,
     FIELD_HSV_HUE_HIGH,
     FIELD_HSV_HUE_LOW,
+    FIELD_HSV_MAX_PIXELS,
     FIELD_HSV_SAT_LOW,
     FIELD_HSV_VAL_LOW,
 )
+from src.post_process import build_field_mask
+
+
+def _subsample_pixels(pixels: np.ndarray, max_n: int) -> np.ndarray:
+    if len(pixels) <= max_n:
+        return pixels
+    idx = np.random.choice(len(pixels), max_n, replace=False)
+    return pixels[idx]
 
 
 def estimate_field_hsv(frames: list[np.ndarray]) -> tuple[int, int, int, int]:
     """Return (hue_low, hue_high, sat_low, val_low) from sample frames."""
-    hues, sats, vals = [], [], []
+    chunks: list[np.ndarray] = []
+    per_frame_cap = max(100, FIELD_HSV_MAX_PIXELS // FIELD_HSV_AUTO_FRAMES)
+
     for frame in frames[:FIELD_HSV_AUTO_FRAMES]:
         h, w = frame.shape[:2]
         roi = frame[int(h * 0.35) : int(h * 0.85), int(w * 0.1) : int(w * 0.9)]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        # green turf heuristic pre-filter
         mask = cv2.inRange(
             hsv,
             np.array([FIELD_HSV_HUE_LOW, FIELD_HSV_SAT_LOW, FIELD_HSV_VAL_LOW]),
@@ -28,20 +38,16 @@ def estimate_field_hsv(frames: list[np.ndarray]) -> tuple[int, int, int, int]:
         pixels = hsv[mask > 0]
         if len(pixels) < 100:
             pixels = hsv.reshape(-1, 3)
-        hues.extend(pixels[:, 0].tolist())
-        sats.extend(pixels[:, 1].tolist())
-        vals.extend(pixels[:, 2].tolist())
+        chunks.append(_subsample_pixels(pixels, per_frame_cap))
 
-    if not hues:
+    if not chunks:
         return FIELD_HSV_HUE_LOW, FIELD_HSV_HUE_HIGH, FIELD_HSV_SAT_LOW, FIELD_HSV_VAL_LOW
 
-    h_arr = np.array(hues)
-    s_arr = np.array(sats)
-    v_arr = np.array(vals)
-    hue_low = int(max(0, np.percentile(h_arr, 5) - 5))
-    hue_high = int(min(179, np.percentile(h_arr, 95) + 5))
-    sat_low = int(max(20, np.percentile(s_arr, 10) - 10))
-    val_low = int(max(20, np.percentile(v_arr, 10) - 10))
+    all_px = np.concatenate(chunks, axis=0)
+    hue_low = int(max(0, np.percentile(all_px[:, 0], 5) - 5))
+    hue_high = int(min(179, np.percentile(all_px[:, 0], 95) + 5))
+    sat_low = int(max(20, np.percentile(all_px[:, 1], 10) - 10))
+    val_low = int(max(20, np.percentile(all_px[:, 2], 10) - 10))
     return hue_low, hue_high, sat_low, val_low
 
 
@@ -52,9 +58,6 @@ def build_field_mask_from_bounds(
     sat_low: int,
     val_low: int,
 ) -> np.ndarray:
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lower = np.array([hue_low, sat_low, val_low])
-    upper = np.array([hue_high, 255, 255])
-    mask = cv2.inRange(hsv, lower, upper)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (51, 51))
-    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    return build_field_mask(
+        frame, hue_low=hue_low, hue_high=hue_high, sat_low=sat_low, val_low=val_low
+    )

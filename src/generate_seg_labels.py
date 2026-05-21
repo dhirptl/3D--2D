@@ -4,16 +4,12 @@ import argparse
 import csv
 import json
 import shutil
-import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 import numpy as np
 from ultralytics import SAM
-
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from src.config import (
     MASK_BOX_PAD_FRAC,
@@ -25,6 +21,7 @@ from src.config import (
     SEG_DATASET_ROOT,
 )
 
+ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = ROOT / "football_dataset"
 PREVIEW_DIR = ROOT / "outputs" / "mask_preview"
 QA_DIR = ROOT / "outputs" / "mask_qa"
@@ -74,10 +71,13 @@ def mask_to_polygon(mask: np.ndarray, w: int, h: int) -> list[float] | None:
 
 def box_iou(mask: np.ndarray, box: tuple[int, int, int, int]) -> float:
     x1, y1, x2, y2 = box
-    box_mask = np.zeros_like(mask)
-    box_mask[y1:y2, x1:x2] = 1
-    inter = np.logical_and(mask > 0, box_mask > 0).sum()
-    union = np.logical_or(mask > 0, box_mask > 0).sum()
+    roi = mask[y1:y2, x1:x2]
+    if roi.size == 0:
+        return 0.0
+    mask_fg = roi > 0
+    inter = int(mask_fg.sum())
+    box_area = (x2 - x1) * (y2 - y1)
+    union = int(mask_fg.size) + box_area - inter
     return inter / union if union > 0 else 0.0
 
 
@@ -88,7 +88,9 @@ def sam_mask_at_index(masks: np.ndarray, idx: int, h: int, w: int) -> np.ndarray
     return (m * 255).astype(np.uint8)
 
 
-def validate_mask(m: np.ndarray, box: tuple[int, int, int, int], w: int, h: int) -> tuple[list[float] | None, float, int, str | None]:
+def validate_mask(
+    m: np.ndarray, box: tuple[int, int, int, int], w: int, h: int
+) -> tuple[list[float] | None, float, int, str | None]:
     area = int(np.count_nonzero(m))
     iou = box_iou(m, box)
     min_area = min_mask_area(box)
@@ -102,9 +104,11 @@ def validate_mask(m: np.ndarray, box: tuple[int, int, int, int], w: int, h: int)
     return poly, iou, area, None
 
 
-def build_preview(img: np.ndarray, accepted: list, rejected: list) -> np.ndarray:
+def build_preview(
+    img: np.ndarray, accepted: list, rejected: list, scale: float = 1.0
+) -> np.ndarray:
     overlay = img.copy()
-    for poly, box, _ in accepted:
+    for _poly, box, _ in accepted:
         x1, y1, x2, y2 = box
         cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 1)
     for box, reason in rejected:
@@ -114,7 +118,35 @@ def build_preview(img: np.ndarray, accepted: list, rejected: list) -> np.ndarray
             overlay, (reason or "?")[:12], (x1, max(y1 - 4, 10)),
             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1,
         )
-    return np.hstack([img, overlay])
+    combined = np.hstack([img, overlay])
+    if scale != 1.0 and scale > 0:
+        nh = int(combined.shape[0] * scale)
+        nw = int(combined.shape[1] * scale)
+        combined = cv2.resize(combined, (nw, nh), interpolation=cv2.INTER_AREA)
+    return combined
+
+
+def _process_retry_batch(
+    sam: SAM,
+    img: np.ndarray,
+    pending_retry: list[tuple[int, tuple]],
+    h: int,
+    w: int,
+) -> list[tuple[int, np.ndarray | None]]:
+    if not pending_retry:
+        return []
+    padded_boxes = [expand_box(box, w, h, MASK_BOX_PAD_FRAC) for _, box in pending_retry]
+    results = sam(img, bboxes=padded_boxes, verbose=False)
+    out = []
+    if results[0].masks is None:
+        return [(bi, None) for bi, _ in pending_retry]
+    masks = results[0].masks.data.cpu().numpy()
+    for i, (bi, _box) in enumerate(pending_retry):
+        if i >= len(masks):
+            out.append((bi, None))
+        else:
+            out.append((bi, sam_mask_at_index(masks, i, h, w)))
+    return out
 
 
 def process_split(
@@ -123,6 +155,10 @@ def process_split(
     preview_budget: list[int],
     reject_writer: csv.writer,
     stats: dict,
+    *,
+    resume: bool = False,
+    preview_scale: float = 1.0,
+    copy_workers: int = 4,
 ) -> tuple[int, int]:
     img_dir = SRC_ROOT / split / "images"
     lbl_dir = SRC_ROOT / split / "labels"
@@ -132,8 +168,14 @@ def process_split(
     out_lbl.mkdir(parents=True, exist_ok=True)
 
     ok, skip = 0, 0
+    copy_jobs: list[tuple[Path, Path]] = []
+
     for label_path in sorted(lbl_dir.glob("*.txt")):
         stem = label_path.stem
+        out_label = out_lbl / f"{stem}.txt"
+        if resume and out_label.exists():
+            continue
+
         img_path = img_dir / f"{stem}.jpg"
         if not img_path.exists():
             for ext in (".png", ".jpeg"):
@@ -156,9 +198,9 @@ def process_split(
         seg_lines = []
         accepted_preview = []
         rejected_preview = []
-        pending_retry = []
+        pending_retry: list[tuple[int, tuple]] = []
 
-        results = sam(str(img_path), bboxes=boxes, verbose=False)
+        results = sam(img, bboxes=boxes, verbose=False)
         if results[0].masks is not None:
             masks = results[0].masks.data.cpu().numpy()
             for bi, box in enumerate(boxes):
@@ -183,15 +225,15 @@ def process_split(
         else:
             pending_retry = [(bi, box) for bi, box in enumerate(boxes)]
 
-        for bi, box in pending_retry:
-            padded = expand_box(box, w, h, MASK_BOX_PAD_FRAC)
-            r = sam(str(img_path), bboxes=[padded], verbose=False)
-            if r[0].masks is None:
+        retry_results = _process_retry_batch(sam, img, pending_retry, h, w)
+        box_by_idx = {bi: box for bi, box in pending_retry}
+        for bi, m in retry_results:
+            box = box_by_idx[bi]
+            if m is None:
                 skip += 1
                 reject_writer.writerow([split, stem, bi, "retry_no_mask", "0", 0])
                 stats["rejected"] += 1
                 continue
-            m = sam_mask_at_index(r[0].masks.data.cpu().numpy(), 0, h, w)
             poly, iou, area, reason = validate_mask(m, box, w, h)
             if poly is None:
                 skip += 1
@@ -207,12 +249,20 @@ def process_split(
                 accepted_preview.append((poly, box, iou))
 
         if seg_lines:
-            shutil.copy2(img_path, out_img / img_path.name)
-            (out_lbl / f"{stem}.txt").write_text("\n".join(seg_lines) + "\n")
+            copy_jobs.append((img_path, out_img / img_path.name))
+            out_label.write_text("\n".join(seg_lines) + "\n")
             if preview_budget[0] > 0:
-                preview = build_preview(img, accepted_preview, rejected_preview)
+                preview = build_preview(img, accepted_preview, rejected_preview, preview_scale)
                 cv2.imwrite(str(PREVIEW_DIR / f"{split}_{stem}.jpg"), preview)
                 preview_budget[0] -= 1
+
+    if copy_jobs:
+
+        def _copy_pair(pair: tuple[Path, Path]) -> None:
+            shutil.copy2(pair[0], pair[1])
+
+        with ThreadPoolExecutor(max_workers=copy_workers) as pool:
+            list(pool.map(_copy_pair, copy_jobs))
 
     return ok, skip
 
@@ -220,6 +270,9 @@ def process_split(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sam", default=SAM_MODEL)
+    parser.add_argument("--resume", action="store_true", help="Skip images with existing labels")
+    parser.add_argument("--preview-scale", type=float, default=1.0)
+    parser.add_argument("--workers", type=int, default=4, help="Parallel image copy workers")
     args = parser.parse_args()
 
     if not SRC_ROOT.exists():
@@ -227,7 +280,7 @@ def main() -> None:
 
     PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
     QA_DIR.mkdir(parents=True, exist_ok=True)
-    if SEG_DATASET_ROOT.exists():
+    if SEG_DATASET_ROOT.exists() and not args.resume:
         shutil.rmtree(SEG_DATASET_ROOT)
 
     print(f"Loading SAM: {args.sam}")
@@ -242,7 +295,16 @@ def main() -> None:
         writer = csv.writer(f)
         writer.writerow(["split", "stem", "box_idx", "reason", "iou", "area"])
         for split in ("train", "valid"):
-            ok, skip = process_split(sam, split, preview_budget, writer, stats)
+            ok, skip = process_split(
+                sam,
+                split,
+                preview_budget,
+                writer,
+                stats,
+                resume=args.resume,
+                preview_scale=args.preview_scale,
+                copy_workers=args.workers,
+            )
             total_ok += ok
             total_skip += skip
             print(f"  {split}: {ok} masks written, {skip} rejected")

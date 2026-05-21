@@ -1,46 +1,46 @@
 """Fine-tune YOLOv11n on football player dataset (frozen backbone, MPS)."""
 
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+import argparse
 
 from ultralytics import YOLO
 
 from src.config import DATASET_YAML
+from src.train_common import ROOT, base_train_kwargs
 
 
-def train(batch: int = 8, device: str = "mps") -> None:
-    data_yaml = DATASET_YAML
-    if not data_yaml.exists():
-        raise FileNotFoundError(
-            f"{data_yaml} not found. Run: python src/prepare_dataset.py"
-        )
+def train(
+    batch: int = 8,
+    device: str = "mps",
+    epochs: int = 100,
+    freeze: int = 10,
+) -> None:
+    if not DATASET_YAML.exists():
+        raise FileNotFoundError(f"{DATASET_YAML} not found. Run: python -m src.prepare_dataset")
 
     model = YOLO("yolo11n.pt")
-    results = model.train(
-        data=str(data_yaml),
-        epochs=150,
-        imgsz=736,
+    kwargs = base_train_kwargs(
+        str(DATASET_YAML),
+        str(ROOT / "football_tracker"),
+        "run_v1",
+        epochs=epochs,
         batch=batch,
-        patience=30,
-        freeze=10,
-        mosaic=1.0,
-        mixup=0.15,
-        fliplr=0.5,
-        hsv_h=0.015,
-        hsv_s=0.7,
-        scale=0.5,
-        translate=0.1,
         device=device,
-        project=str(ROOT / "football_tracker"),
-        name="run_v1",
+        freeze=freeze,
     )
+    model.train(**kwargs)
     print(f"Training complete. Weights: {ROOT / 'football_tracker' / 'run_v1' / 'weights' / 'best.pt'}")
-    return results
 
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch", type=int, default=8)
+    parser.add_argument("--device", default="mps")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument(
+        "--freeze",
+        type=int,
+        default=10,
+        help="Frozen backbone layers for early epochs (0 = full fine-tune)",
+    )
+    args = parser.parse_args()
+    train(batch=args.batch, device=args.device, epochs=args.epochs, freeze=args.freeze)

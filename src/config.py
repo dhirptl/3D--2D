@@ -17,6 +17,15 @@ FIELD_HSV_HUE_HIGH = 85
 FIELD_HSV_SAT_LOW = 40
 FIELD_HSV_VAL_LOW = 40
 
+# Yard lines (white/yellow markings) for turf mask
+YARD_LINE_SAT_MAX = 60
+YARD_LINE_VAL_MIN = 180
+
+# TDD upper-body color sampling
+UPPER_BODY_FRAC = 0.30
+MIN_COLOR_PIXELS = 10
+MIN_UPPER_MASK_PIXELS = 50
+
 # Detection model (legacy bbox)
 MODEL_PATH = ROOT / "football_tracker" / "run_v1" / "weights" / "best.pt"
 
@@ -25,7 +34,6 @@ SEG_MODEL_PATH = ROOT / "football_tracker_seg" / "run_v1-2" / "weights" / "best.
 SEG_DATASET_YAML = ROOT / "football_dataset_seg" / "data.yaml"
 SEG_DATASET_ROOT = ROOT / "football_dataset_seg"
 
-TRACKER_CFG = ROOT / "configs" / "bytetrack.yaml"
 DATASET_YAML = ROOT / "football_dataset" / "data.yaml"
 
 # --- SAM label generation ---
@@ -42,22 +50,101 @@ GATE2_MASK_RECALL = 0.70
 
 # --- Team classification (TDD Part 9) ---
 WARMUP_CONF_MIN = 0.45
-QUALITY_FRAMES = 80
+WARMUP_CONF_RELAXED = 0.38
+WARMUP_CONF_RELAX_AFTER_FAILS = 2
+QUALITY_FRAMES = 50
+WARMUP_MAX_PER_TRACK = 3
+WARMUP_MIN_UNIQUE_TRACKS = 12
+FIELD_MASK_MIN_FRAC = 0.25
 W_H = 2.5
-W_B = 0.5
+MASK_ERODE_PX = 2
 TEAM_REF_S_MAX = 25
 TEAM_REF_STD_V_MIN = 50
+TEAM_REF_MAX_MASK_AREA = 2500
+TEAM_REF_MIN_ASPECT = 1.35
 MINIMUM_CENTROID_DISTANCE = 1.5
 MINIMUM_CENTROID_DISTANCE_FALLBACK = 1.0
 CALIBRATION_FAIL_MAX = 3
+CALIBRATION_VERSION = 2
+FEATURE_VERSION = "lab4d_v1"
 
 FIELD_HSV_AUTO_FRAMES = 30
 
 DEQUE_LENGTH = 20
 CONFIDENCE_MARGIN = 1.5
+CONFIDENCE_MARGIN_MIN = 0.8
+CONFIDENCE_MARGIN_FRAC = 0.12
+WARMUP_CONFIDENCE_MARGIN = 1.0
+WARMUP_SOFT_LOCK_THRESHOLD = 6
+ESCAPE_MARGIN_FRAC = 0.25
+ESCAPE_MARGIN_MIN = 2.0
 SOFT_LOCK_THRESHOLD = 10
 ESCAPE_THRESHOLD = 6
 ESCAPE_MARGIN = 3.0
 
-# Scaler fits raw 12D columns [1,2, 4,5, 7,8, 10,11] -> indices 0..7
-SCALER_SV_COLS = [1, 2, 4, 5, 7, 8, 10, 11]
+# Scaler fits all 4 LAB AB dimensions
+SCALER_LAB_COLS = [0, 1, 2, 3]
+SCALER_SV_COLS = SCALER_LAB_COLS  # backward-compat alias
+
+# Pre-filter before KMeans k=2
+PREFILTER_CHROMA_MAX = 18.0  # max |mean_A-128| and |mean_B-128| for neutral/ref
+PREFILTER_FIELD_AB_DIST = 25.0  # drop samples near field AB centroid
+TEAM_REF_AB_STD_MAX = 12.0  # low chrominance std = referee-like
+
+# Green-safeguard turf subtract
+GREEN_SAFEGUARD_HSV_FRAC = 0.55
+GREEN_SAFEGUARD_AB_STD_MAX = 15.0
+
+# Field homography registration
+FIELD_REG_MIN_INLIERS = 4
+FIELD_REG_MAX_REPROJ_ERR = 8.0
+FIELD_REG_VALID_STREAK = 3
+FIELD_REG_TEMPLATE_W = 1200
+FIELD_REG_TEMPLATE_H = 533
+
+# Pose model
+POSE_MODEL_PATH = ROOT / "yolo11n-pose.pt"
+POSE_EVERY_DEFAULT = 1
+POSE_IOU_MATCH = 0.5
+
+# Tracker (default BoT-SORT + Re-ID)
+TRACKER_CFG = ROOT / "configs" / "botsort.yaml"
+BYTETRACK_CFG = ROOT / "configs" / "bytetrack.yaml"
+
+# Warmup timeout & progressive relaxation
+WARMUP_FRAME_TIMEOUT = 1500
+WARMUP_RELAX_AT_600 = 600
+WARMUP_RELAX_AT_1200 = 1200
+CALIBRATION_COOLDOWN_FRAMES = 150
+CALIBRATION_MIN_NEW_SAMPLES = 15
+WARMUP_TIMEOUT_MIN_VECTORS = 20
+
+# Scaler sanity (legacy name; LAB uses B channel spread)
+EXPECTED_S_MEAN_RANGE = (40, 180)
+EXPECTED_B_MEAN_RANGE = (90, 170)
+
+# Field mask cache & rolling HSV
+FIELD_MASK_INTERVAL = 30
+FIELD_HSV_UPDATE_INTERVAL = 300
+FIELD_HSV_BLEND_ALPHA = 0.1
+CAMERA_CUT_MAD_THRESHOLD = 30.0
+POST_CUT_FRAMES = 60
+
+# Pile-up guard
+PILE_UP_DISTANCE_PX = 80
+PILE_UP_ESCAPE_THRESHOLD = 20
+MASK_AREA_FREEZE_MULT = 2.0
+
+# Similar-color warning
+SIMILAR_COLOR_WARN_ATTEMPTS = 10
+SIMILAR_COLOR_AVG_DIST_THRESHOLD = 0.8
+
+# Inference
+DETECT_EVERY_DEFAULT = 1
+KMEANS_N_INIT = 10
+KMEANS_RANDOM_STATE = 42
+FIELD_HSV_MAX_PIXELS = 50_000
+WARMUP_VECTOR_CAP = QUALITY_FRAMES * 2
+PIPELINE_THREADS_DEFAULT = 4
+RETINA_BENCHMARK_FRAMES = 10
+RETINA_MAX_MS_PER_FRAME = 40.0

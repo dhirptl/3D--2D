@@ -41,19 +41,18 @@ def gate1(train_labels: Path, val_labels: Path, data_yaml: Path) -> None:
     assert cfg["nc"] == 1, f"Gate 1 fail: nc={cfg['nc']}, expected 1"
     assert cfg["names"] == ["Player"], f"Gate 1 fail: names={cfg['names']}"
 
-    train_stems = {p.stem for p in train_labels.glob("*.txt")}
-    val_stems = {p.stem for p in val_labels.glob("*.txt")}
-    assert not train_stems & val_stems, "Gate 1 fail: train/val overlap"
-
-    for split_name, labels_dir in [("train", train_labels), ("valid", val_labels)]:
+    train_stems: set[str] = set()
+    val_stems: set[str] = set()
+    for labels_dir, stems in ((train_labels, train_stems), (val_labels, val_stems)):
         for label_file in labels_dir.glob("*.txt"):
+            stems.add(label_file.stem)
             for line in label_file.read_text().strip().splitlines():
                 if line.strip():
                     cls = int(line.split()[0])
                     assert cls == 0, f"Gate 1 fail: class {cls} in {label_file}"
 
-    n_train, n_val = len(train_stems), len(val_stems)
-    print(f"Gate 1 PASSED: nc=1, train={n_train}, valid={n_val}, disjoint splits")
+    assert not train_stems & val_stems, "Gate 1 fail: train/val overlap"
+    print(f"Gate 1 PASSED: nc=1, train={len(train_stems)}, valid={len(val_stems)}, disjoint splits")
 
 
 def main() -> None:
@@ -90,11 +89,12 @@ def main() -> None:
         stems, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=bins
     )
 
+    if OUT_ROOT.exists():
+        shutil.rmtree(OUT_ROOT)
+
     for split, split_stems in [("train", train_stems), ("valid", val_stems)]:
         img_dir = OUT_ROOT / split / "images"
         lbl_dir = OUT_ROOT / split / "labels"
-        if img_dir.exists():
-            shutil.rmtree(img_dir.parent)
         img_dir.mkdir(parents=True, exist_ok=True)
         lbl_dir.mkdir(parents=True, exist_ok=True)
 

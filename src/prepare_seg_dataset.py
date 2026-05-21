@@ -1,15 +1,19 @@
 """Write football_dataset_seg/data.yaml after SAM label generation."""
 
-import sys
 from pathlib import Path
 
 import yaml
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from src.config import SEG_DATASET_ROOT
+
+
+def _count_images(directory: Path) -> int:
+    if not directory.exists():
+        return 0
+    n = 0
+    for _ in directory.iterdir():
+        n += 1
+    return n
 
 
 def main() -> None:
@@ -17,11 +21,11 @@ def main() -> None:
     val_imgs = SEG_DATASET_ROOT / "valid" / "images"
     if not train_imgs.exists():
         raise FileNotFoundError(
-            f"{train_imgs} missing. Run: python src/generate_seg_labels.py"
+            f"{train_imgs} missing. Run: python -m src.generate_seg_labels"
         )
 
-    n_train = len(list(train_imgs.glob("*")))
-    n_val = len(list(val_imgs.glob("*"))) if val_imgs.exists() else 0
+    n_train = _count_images(train_imgs)
+    n_val = _count_images(val_imgs)
 
     data = {
         "path": str(SEG_DATASET_ROOT.resolve()),

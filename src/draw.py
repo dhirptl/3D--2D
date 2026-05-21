@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from src.config import QUALITY_FRAMES
+from src.config import QUALITY_FRAMES, WARMUP_MIN_UNIQUE_TRACKS
 from src.team_classifier import FootballTeamClassifier
 
 COLOR_GREY = (128, 128, 128)
@@ -28,6 +28,24 @@ def team_color(label: int, state: str, *, preview: bool = False) -> tuple[int, i
     return COLOR_GREY
 
 
+def _blend_mask_roi(
+    out: np.ndarray,
+    crop_mask: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    color: tuple[int, int, int],
+) -> None:
+    x1, y1, x2, y2 = bbox
+    roi = out[y1:y2, x1:x2]
+    if crop_mask.shape[:2] != roi.shape[:2]:
+        m = cv2.resize(crop_mask, (roi.shape[1], roi.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+    else:
+        m = crop_mask > 0
+    if not np.any(m):
+        return
+    color_arr = np.array(color, dtype=np.float32)
+    roi[m] = (roi[m].astype(np.float32) * 0.6 + color_arr * 0.4).astype(np.uint8)
+
+
 def draw_teams(
     frame: np.ndarray,
     detections: list[dict],
@@ -35,10 +53,12 @@ def draw_teams(
     classifier: FootballTeamClassifier,
     *,
     show_masks: bool = False,
+    debug_teams: bool = False,
 ) -> np.ndarray:
     out = frame.copy()
     state = classifier.state
     warmup_count = classifier.warmup_count
+    unique_tracks = classifier.warmup_unique_tracks
     use_preview = state == FootballTeamClassifier.STATE_WARMUP and classifier.preview_centroids is not None
 
     flash = classifier.cal_log.tick_flash()
@@ -59,8 +79,7 @@ def draw_teams(
         thickness = 2 if state == FootballTeamClassifier.STATE_LOCKED else 1
 
         if show_masks and det.get("mask") is not None:
-            m = det["mask"] > 0
-            out[m] = (out[m] * 0.6 + np.array(color) * 0.4).astype(np.uint8)
+            _blend_mask_roi(out, det["mask"], (x1, y1, x2, y2), color)
 
         cv2.rectangle(out, (x1, y1), (x2, y2), color, thickness)
         conf = det.get("conf", 0.0)
@@ -70,13 +89,24 @@ def draw_teams(
         elif label == -2:
             tag += " REF"
         tag += f" {conf:.2f}"
+
+        if debug_teams:
+            dbg = classifier.last_frame_debug.get(tid, {})
+            if "dist0" in dbg:
+                tag += f" d0={dbg['dist0']:.1f} d1={dbg['dist1']:.1f}"
+            elif "reject" in dbg:
+                tag += f" [{dbg['reject']}]"
+
         cv2.putText(
             out, tag, (x1, max(y1 - 6, 0)),
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA,
         )
 
     if state == FootballTeamClassifier.STATE_WARMUP:
-        status = f"WARMUP ({warmup_count}/{QUALITY_FRAMES})"
+        status = (
+            f"WARMUP {warmup_count}/{QUALITY_FRAMES} "
+            f"tracks={unique_tracks}/{WARMUP_MIN_UNIQUE_TRACKS}"
+        )
     elif state == FootballTeamClassifier.STATE_CALIBRATING:
         status = "CALIBRATING"
     else:
