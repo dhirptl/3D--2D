@@ -1,0 +1,33 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.DS_Store
+
+# Large binaries & media (download / train locally)
+*.pt
+!football_tracker_seg/run_v1-2/weights/best.pt
+*.mov
+*.mp4
+*.pkl
+
+# Generated outputs
+outputs/
+runs/
+
+# Datasets (Roboflow export — see README.roboflow.txt)
+football_dataset/
+football_dataset_seg/**
+!football_dataset_seg/data.yaml
+train/
+valid/
+
+# Training artifacts (keep args + best weights only)
+football_tracker/
+football_tracker_seg/run_v1/
+football_tracker_seg/**/weights/last.pt
+football_tracker_seg/**/*.jpg
+football_tracker_seg/**/*.png
+football_tracker_seg/**/results.csv
+football_tracker_seg/**/weights/epoch*.pt
