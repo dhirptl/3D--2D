@@ -20,6 +20,8 @@ runs/
 football_dataset/
 football_dataset_seg/**
 !football_dataset_seg/data.yaml
+merged_football_dataset_v2/
+merged_football_dataset_v2_seg/
 train/
 valid/
 

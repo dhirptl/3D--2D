@@ -1,6 +1,7 @@
 """Fine-tune YOLOv11n-seg on SAM-generated football player masks."""
 
 import argparse
+from pathlib import Path
 
 from ultralytics import YOLO
 
@@ -14,15 +15,17 @@ def train(
     name: str = "run_v1",
     epochs: int = 100,
     freeze: int = 10,
+    data: str | None = None,
 ) -> None:
-    if not SEG_DATASET_YAML.exists():
+    data_yaml = Path(data).resolve() if data else SEG_DATASET_YAML
+    if not data_yaml.exists():
         raise FileNotFoundError(
-            f"{SEG_DATASET_YAML} not found. Run generate_seg_labels.py and prepare_seg_dataset.py"
+            f"{data_yaml} not found. Run generate_seg_labels.py first."
         )
 
     model = YOLO("yolo11n-seg.pt")
     kwargs = base_train_kwargs(
-        str(SEG_DATASET_YAML),
+        str(data_yaml),
         str(ROOT / "football_tracker_seg"),
         name,
         epochs=epochs,
@@ -50,6 +53,7 @@ if __name__ == "__main__":
         default=10,
         help="Frozen backbone layers for early epochs (0 = full fine-tune)",
     )
+    parser.add_argument("--data", default=None, help="Path to data.yaml (overrides default SEG_DATASET_YAML)")
     args = parser.parse_args()
     train(
         batch=args.batch,
@@ -57,4 +61,5 @@ if __name__ == "__main__":
         name=args.name,
         epochs=args.epochs,
         freeze=args.freeze,
+        data=args.data,
     )

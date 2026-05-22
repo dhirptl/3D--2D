@@ -156,14 +156,16 @@ def process_split(
     reject_writer: csv.writer,
     stats: dict,
     *,
+    src_root: Path,
+    out_root: Path,
     resume: bool = False,
     preview_scale: float = 1.0,
     copy_workers: int = 4,
 ) -> tuple[int, int]:
-    img_dir = SRC_ROOT / split / "images"
-    lbl_dir = SRC_ROOT / split / "labels"
-    out_img = SEG_DATASET_ROOT / split / "images"
-    out_lbl = SEG_DATASET_ROOT / split / "labels"
+    img_dir = src_root / split / "images"
+    lbl_dir = src_root / split / "labels"
+    out_img = out_root / split / "images"
+    out_lbl = out_root / split / "labels"
     out_img.mkdir(parents=True, exist_ok=True)
     out_lbl.mkdir(parents=True, exist_ok=True)
 
@@ -273,15 +275,29 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true", help="Skip images with existing labels")
     parser.add_argument("--preview-scale", type=float, default=1.0)
     parser.add_argument("--workers", type=int, default=4, help="Parallel image copy workers")
+    parser.add_argument("--src", default=None, help="Source bbox dataset root (overrides default football_dataset)")
+    parser.add_argument("--out", default=None, help="Output seg dataset root (overrides default football_dataset_seg)")
     args = parser.parse_args()
 
-    if not SRC_ROOT.exists():
-        raise FileNotFoundError(f"Run prepare_dataset.py first. Missing {SRC_ROOT}")
+    src_root = Path(args.src).resolve() if args.src else SRC_ROOT
+    out_root = Path(args.out).resolve() if args.out else SEG_DATASET_ROOT
+
+    if not src_root.exists():
+        raise FileNotFoundError(f"Source dataset not found: {src_root}")
+
+    # Auto-detect splits by finding subdirs that contain an images/ and labels/ subdir
+    splits = sorted(
+        d.name for d in src_root.iterdir()
+        if d.is_dir() and (d / "images").exists() and (d / "labels").exists()
+    )
+    if not splits:
+        raise FileNotFoundError(f"No valid split dirs found under {src_root}")
+    print(f"Detected splits: {splits}")
 
     PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
     QA_DIR.mkdir(parents=True, exist_ok=True)
-    if SEG_DATASET_ROOT.exists() and not args.resume:
-        shutil.rmtree(SEG_DATASET_ROOT)
+    if out_root.exists() and not args.resume:
+        shutil.rmtree(out_root)
 
     print(f"Loading SAM: {args.sam}")
     sam = SAM(args.sam)
@@ -294,13 +310,15 @@ def main() -> None:
     with reject_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["split", "stem", "box_idx", "reason", "iou", "area"])
-        for split in ("train", "valid"):
+        for split in splits:
             ok, skip = process_split(
                 sam,
                 split,
                 preview_budget,
                 writer,
                 stats,
+                src_root=src_root,
+                out_root=out_root,
                 resume=args.resume,
                 preview_scale=args.preview_scale,
                 copy_workers=args.workers,
@@ -323,7 +341,7 @@ def main() -> None:
     }
     (QA_DIR / "stats.json").write_text(json.dumps(summary, indent=2))
 
-    print(f"Done. Dataset: {SEG_DATASET_ROOT}")
+    print(f"Done. Dataset: {out_root}")
     print(f"Keep rate: {keep_rate:.1%}  mean IoU: {mean_iou:.3f}")
     print(f"QA: {QA_DIR}/stats.json  previews: {PREVIEW_DIR}")
 
