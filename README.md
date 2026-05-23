@@ -129,4 +129,4 @@ python tests/test_optimizations.py
 
 | Model | Path |
 |-------|------|
-| Seg (primary) | `football_tracker_seg/run_v1-2/weights/best.pt` |
+| Seg (primary) | `football_tracker_seg/run_v2/weights/best.pt` |
