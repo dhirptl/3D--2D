@@ -65,19 +65,28 @@ def extract_tracked_detections(
     run_inference: bool = True,
     retina_masks: bool = False,
     tracker_cfg: Path | None = None,
+    player_conf: float | None = None,
+    player_iou: float | None = None,
+    player_imgsz: int | None = None,
+    player_max_det: int | None = None,
+    field_mask: np.ndarray | None = None,
 ) -> list[dict]:
     if not run_inference:
         return []
 
     cfg = tracker_cfg or TRACKER_CFG
     tracker = str(cfg) if cfg.exists() else "botsort.yaml"
+    conf = PLAYER_PREDICT_CONF if player_conf is None else player_conf
+    iou = PLAYER_PREDICT_IOU if player_iou is None else player_iou
+    imgsz = PLAYER_IMGSZ if player_imgsz is None else player_imgsz
+    max_det = PLAYER_PREDICT_MAX_DET if player_max_det is None else player_max_det
     results = model.track(
         frame,
         classes=[PLAYER_CLASS_ID],
-        conf=PLAYER_PREDICT_CONF,
-        iou=PLAYER_PREDICT_IOU,
-        imgsz=PLAYER_IMGSZ,
-        max_det=PLAYER_PREDICT_MAX_DET,
+        conf=conf,
+        iou=iou,
+        imgsz=imgsz,
+        max_det=max_det,
         tracker=tracker,
         persist=True,
         retina_masks=retina_masks,
@@ -106,7 +115,7 @@ def extract_tracked_detections(
     xyxy = orig_xyxy
     if apply_hud_filter:
         xyxy, confs, track_ids = filter_hud_detections(
-            frame.shape, xyxy, confs, track_ids
+            frame.shape, xyxy, confs, track_ids, field_mask=field_mask
         )
         if len(xyxy) == 0:
             if stats:

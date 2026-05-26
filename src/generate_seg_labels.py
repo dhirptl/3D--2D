@@ -18,11 +18,12 @@ from src.config import (
     MASK_MIN_BOX_IOU,
     MASK_PREVIEW_COUNT,
     SAM_MODEL,
+    SEG_BBOX_SOURCE_ROOT,
     SEG_DATASET_ROOT,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC_ROOT = ROOT / "football_dataset"
+SRC_ROOT = SEG_BBOX_SOURCE_ROOT
 PREVIEW_DIR = ROOT / "outputs" / "mask_preview"
 QA_DIR = ROOT / "outputs" / "mask_qa"
 
@@ -161,7 +162,7 @@ def process_split(
     resume: bool = False,
     preview_scale: float = 1.0,
     copy_workers: int = 4,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     img_dir = src_root / split / "images"
     lbl_dir = src_root / split / "labels"
     out_img = out_root / split / "images"
@@ -169,7 +170,7 @@ def process_split(
     out_img.mkdir(parents=True, exist_ok=True)
     out_lbl.mkdir(parents=True, exist_ok=True)
 
-    ok, skip = 0, 0
+    ok, skip, negatives = 0, 0, 0
     copy_jobs: list[tuple[Path, Path]] = []
 
     for label_path in sorted(lbl_dir.glob("*.txt")):
@@ -195,6 +196,9 @@ def process_split(
         lines = label_path.read_text().strip().splitlines()
         boxes = [yolo_box_to_xyxy(ln, w, h) for ln in lines if ln.strip()]
         if not boxes:
+            copy_jobs.append((img_path, out_img / img_path.name))
+            out_label.write_text("")
+            negatives += 1
             continue
 
         seg_lines = []
@@ -266,7 +270,7 @@ def process_split(
         with ThreadPoolExecutor(max_workers=copy_workers) as pool:
             list(pool.map(_copy_pair, copy_jobs))
 
-    return ok, skip
+    return ok, skip, negatives
 
 
 def main() -> None:
@@ -305,13 +309,13 @@ def main() -> None:
     reject_path = QA_DIR / "rejections.csv"
     stats = {"accepted": 0, "rejected": 0, "iou_sum": 0.0, "area_sum": 0.0}
     preview_budget = [MASK_PREVIEW_COUNT]
-    total_ok, total_skip = 0, 0
+    total_ok, total_skip, total_negatives = 0, 0, 0
 
     with reject_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["split", "stem", "box_idx", "reason", "iou", "area"])
         for split in splits:
-            ok, skip = process_split(
+            ok, skip, negatives = process_split(
                 sam,
                 split,
                 preview_budget,
@@ -325,7 +329,8 @@ def main() -> None:
             )
             total_ok += ok
             total_skip += skip
-            print(f"  {split}: {ok} masks written, {skip} rejected")
+            total_negatives += negatives
+            print(f"  {split}: {ok} masks written, {skip} rejected, {negatives} negatives")
 
     total = stats["accepted"] + stats["rejected"]
     keep_rate = stats["accepted"] / total if total else 0.0
@@ -337,6 +342,7 @@ def main() -> None:
         "keep_rate": round(keep_rate, 4),
         "mean_iou": round(mean_iou, 4),
         "mean_mask_area": round(mean_area, 1),
+        "negative_images": total_negatives,
         "sam_model": args.sam,
     }
     (QA_DIR / "stats.json").write_text(json.dumps(summary, indent=2))

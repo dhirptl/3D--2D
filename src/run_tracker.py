@@ -15,7 +15,14 @@ from src.config import (
     BYTETRACK_CFG,
     CALIBRATION_VERSION,
     DETECT_EVERY_DEFAULT,
+    HELMET_CONF,
+    HELMET_GATE_GRACE,
+    HELMET_MODEL_PATH,
     PIPELINE_THREADS_DEFAULT,
+    PLAYER_IMGSZ,
+    PLAYER_PREDICT_CONF,
+    PLAYER_PREDICT_IOU,
+    PLAYER_PREDICT_MAX_DET,
     POSE_EVERY_DEFAULT,
     RETINA_BENCHMARK_FRAMES,
     RETINA_MAX_MS_PER_FRAME,
@@ -75,11 +82,27 @@ def run(
     tracker: str = "botsort",
     pose_every: int = POSE_EVERY_DEFAULT,
     no_pose: bool = False,
+    require_helmet: bool = False,
+    helmet_model_path: Path | None = None,
+    helmet_conf: float = HELMET_CONF,
+    use_helmet_gate: bool = True,
+    helmet_gate_grace: int = HELMET_GATE_GRACE,
+    player_conf: float = PLAYER_PREDICT_CONF,
+    player_iou: float = PLAYER_PREDICT_IOU,
+    player_imgsz: int = PLAYER_IMGSZ,
+    player_max_det: int = PLAYER_PREDICT_MAX_DET,
 ) -> None:
     weights = model_path or SEG_MODEL_PATH
     if not weights.exists():
         raise FileNotFoundError(
             f"Seg model not found: {weights}. Train: python -m src.train_football_seg"
+        )
+    helmet_weights = helmet_model_path or HELMET_MODEL_PATH
+    if require_helmet and not helmet_weights.exists():
+        raise FileNotFoundError(
+            "Helmet model not found: "
+            f"{helmet_weights}. Run: python -m src.prepare_helmet_dataset "
+            "&& python -m src.train_helmet_detector"
         )
 
     model = YOLO(str(weights))
@@ -95,8 +118,17 @@ def run(
         detect_every=max(1, detect_every),
         retina_masks=retina_masks,
         tracker_cfg=tracker_path,
+        player_conf=player_conf,
+        player_iou=player_iou,
+        player_imgsz=max(64, int(player_imgsz)),
+        player_max_det=max(1, int(player_max_det)),
         pose_every=max(1, pose_every),
         use_pose=not no_pose,
+        require_helmet=require_helmet,
+        helmet_model_path=helmet_weights,
+        helmet_conf=helmet_conf,
+        use_helmet_gate=use_helmet_gate,
+        helmet_gate_grace=max(0, helmet_gate_grace),
     )
     team_state_counts: Counter = Counter()
     total_frames = 0
@@ -122,6 +154,10 @@ def run(
                 frame_idx=0,
                 run_inference=True,
                 retina_masks=True,
+                player_conf=ctx.player_conf,
+                player_iou=ctx.player_iou,
+                player_imgsz=ctx.player_imgsz,
+                player_max_det=ctx.player_max_det,
             )
             warmup_times.append(time.perf_counter() - t0)
         if warmup_times:
@@ -242,7 +278,13 @@ def run(
         print(f"Saved calibration to {cal_path} (v{CALIBRATION_VERSION})")
 
     print(ctx.det_stats.summary())
+    if ctx.det_stats.frames:
+        zero_det_rate = ctx.det_stats.zero_det_frames / ctx.det_stats.frames
+        print(f"Zero-det rate: {zero_det_rate:.1%}")
     print(f"Wrote {frame_idx} frames to {out_path}")
+    if total_frames:
+        print(f"Track ID change rate: {ctx.track_id_changes / total_frames:.4f}")
+        print(f"Registration valid frames: {100 * ctx.registration_valid_frames / total_frames:.1f}%")
     if classifier is not None:
         print(f"Classifier states: {dict(team_state_counts)}")
         print(f"Final state: {classifier.state}  warmup_samples: {classifier.warmup_count}")
@@ -259,7 +301,11 @@ def main() -> None:
     parser.add_argument("--out", default=str(CONFIG_ROOT / "outputs" / "tracked.mp4"))
     parser.add_argument("--model", default=None)
     parser.add_argument("--no-team", action="store_true")
-    parser.add_argument("--filter-field", action="store_true")
+    parser.add_argument(
+        "--filter-field",
+        action="store_true",
+        help="Require playable-area overlap near the feet (homography-backed with HSV fallback)",
+    )
     parser.add_argument("--no-hud-filter", action="store_true")
     parser.add_argument("--show-masks", action="store_true")
     parser.add_argument("--debug-teams", action="store_true", help="Show dist0/dist1 and reject reasons")
@@ -293,6 +339,30 @@ def main() -> None:
         help="Tracker config (default: botsort with Re-ID)",
     )
     parser.add_argument(
+        "--player-conf",
+        type=float,
+        default=PLAYER_PREDICT_CONF,
+        help="Player detector confidence threshold",
+    )
+    parser.add_argument(
+        "--player-iou",
+        type=float,
+        default=PLAYER_PREDICT_IOU,
+        help="Player detector NMS IoU threshold",
+    )
+    parser.add_argument(
+        "--player-imgsz",
+        type=int,
+        default=PLAYER_IMGSZ,
+        help="Player detector inference image size",
+    )
+    parser.add_argument(
+        "--player-max-det",
+        type=int,
+        default=PLAYER_PREDICT_MAX_DET,
+        help="Player detector max detections per frame",
+    )
+    parser.add_argument(
         "--pose-every",
         type=int,
         default=POSE_EVERY_DEFAULT,
@@ -307,6 +377,33 @@ def main() -> None:
         "--force-retina",
         action="store_true",
         help="Keep retina_masks even if benchmark is slow",
+    )
+    parser.add_argument(
+        "--require-helmet",
+        action="store_true",
+        help="Keep only tracked detections with a matching helmet near the head region",
+    )
+    parser.add_argument(
+        "--helmet-model",
+        default=None,
+        help="Override helmet detector weights path",
+    )
+    parser.add_argument(
+        "--helmet-conf",
+        type=float,
+        default=HELMET_CONF,
+        help="Helmet detector confidence threshold",
+    )
+    parser.add_argument(
+        "--no-helmet-gate",
+        action="store_true",
+        help="Disable temporal smoothing for helmet verification",
+    )
+    parser.add_argument(
+        "--helmet-gate-grace",
+        type=int,
+        default=HELMET_GATE_GRACE,
+        help="Allow this many initial frames before helmet confirmation is required",
     )
     args = parser.parse_args()
 
@@ -332,6 +429,15 @@ def main() -> None:
         tracker=args.tracker,
         pose_every=args.pose_every,
         no_pose=args.no_pose,
+        require_helmet=args.require_helmet,
+        helmet_model_path=Path(args.helmet_model) if args.helmet_model else None,
+        helmet_conf=args.helmet_conf,
+        use_helmet_gate=not args.no_helmet_gate,
+        helmet_gate_grace=args.helmet_gate_grace,
+        player_conf=args.player_conf,
+        player_iou=args.player_iou,
+        player_imgsz=args.player_imgsz,
+        player_max_det=args.player_max_det,
     )
 
 

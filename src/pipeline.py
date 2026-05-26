@@ -13,12 +13,21 @@ from src.config import (
     FIELD_HSV_UPDATE_INTERVAL,
     FIELD_MASK_INTERVAL,
     FIELD_REG_VALID_STREAK,
+    HELMET_CONF,
+    HELMET_GATE_GRACE,
+    HELMET_HEAD_IOU,
+    HELMET_MODEL_PATH,
+    PLAYER_IMGSZ,
+    PLAYER_PREDICT_CONF,
+    PLAYER_PREDICT_IOU,
+    PLAYER_PREDICT_MAX_DET,
     POSE_EVERY_DEFAULT,
     POST_CUT_FRAMES,
 )
 from src.detection import DetectionStats, extract_tracked_detections
 from src.field_hsv import build_field_mask_from_bounds, estimate_field_hsv
 from src.field_registration import FieldRegistration, center_roi_green_fraction
+from src.helmet_verify import HelmetTrackGate, detect_helmets, filter_detections_by_helmet
 from src.pose_estimation import attach_keypoints_to_detections, get_pose_model, run_pose_on_frame
 from src.post_process import build_field_mask, filter_by_field_area
 from src.team_classifier import FootballTeamClassifier
@@ -34,8 +43,17 @@ class VideoPipelineContext:
     detect_every: int = 1
     retina_masks: bool = False
     tracker_cfg: Path | None = None
+    player_conf: float = PLAYER_PREDICT_CONF
+    player_iou: float = PLAYER_PREDICT_IOU
+    player_imgsz: int = PLAYER_IMGSZ
+    player_max_det: int = PLAYER_PREDICT_MAX_DET
     pose_every: int = POSE_EVERY_DEFAULT
     use_pose: bool = True
+    require_helmet: bool = False
+    helmet_model_path: Path | None = None
+    helmet_conf: float = HELMET_CONF
+    use_helmet_gate: bool = True
+    helmet_gate_grace: int = HELMET_GATE_GRACE
     field_hsv_bounds: tuple[int, int, int, int] | None = None
     auto_frames: list = field(default_factory=list)
     last_detections: list = field(default_factory=list)
@@ -50,6 +68,10 @@ class VideoPipelineContext:
     registration_valid_frames: int = 0
     hsv_deferred: bool = True
     _pose_model: YOLO | None = None
+    _helmet_model: YOLO | None = None
+    _last_helmets: list = field(default_factory=list)
+    _helmet_cache_frame: int = -1
+    _helmet_gate: HelmetTrackGate | None = None
     track_id_changes: int = 0
     prev_track_ids: set[int] = field(default_factory=set)
 
@@ -147,6 +169,38 @@ def _attach_pose(frame: np.ndarray, ctx: VideoPipelineContext, detections: list[
             print(f"[pose] disabled: {e}")
 
 
+def _helmet_gate(ctx: VideoPipelineContext) -> HelmetTrackGate | None:
+    if not ctx.use_helmet_gate:
+        return None
+    if ctx._helmet_gate is None or ctx._helmet_gate.grace != ctx.helmet_gate_grace:
+        ctx._helmet_gate = HelmetTrackGate(grace=max(0, ctx.helmet_gate_grace))
+    return ctx._helmet_gate
+
+
+def _helmet_model(ctx: VideoPipelineContext) -> YOLO:
+    path = ctx.helmet_model_path or HELMET_MODEL_PATH
+    if ctx._helmet_model is None:
+        ctx._helmet_model = YOLO(str(path))
+    return ctx._helmet_model
+
+
+def _helmet_detections(
+    frame: np.ndarray,
+    ctx: VideoPipelineContext,
+    *,
+    run_yolo: bool,
+) -> list[dict]:
+    if not ctx.require_helmet:
+        return []
+    if not run_yolo:
+        return ctx._last_helmets
+
+    helmets = detect_helmets(_helmet_model(ctx), frame, conf=ctx.helmet_conf)
+    ctx._last_helmets = helmets
+    ctx._helmet_cache_frame = ctx.frame_idx
+    return helmets
+
+
 def _cached_team_labels(ctx: VideoPipelineContext, detections: list[dict]) -> dict[int, int]:
     clf = ctx.classifier
     assert clf is not None
@@ -197,6 +251,11 @@ def process_video_frame(
             run_inference=True,
             retina_masks=ctx.retina_masks,
             tracker_cfg=ctx.tracker_cfg,
+            player_conf=ctx.player_conf,
+            player_iou=ctx.player_iou,
+            player_imgsz=ctx.player_imgsz,
+            player_max_det=ctx.player_max_det,
+            field_mask=field_mask,
         )
         _attach_pose(frame, ctx, detections)
         detections = [{**d, "frame_age": 0} for d in detections]
@@ -215,6 +274,19 @@ def process_video_frame(
         xyxy, confs, tids = filter_by_field_area(frame, xyxy, confs, tids, field_mask)
         keep = {int(t) for t in tids} if len(tids) else set()
         detections = [d for d in detections if d["track_id"] in keep]
+
+    helmets = _helmet_detections(frame, ctx, run_yolo=run_yolo)
+    if ctx.require_helmet and detections:
+        detections = filter_detections_by_helmet(
+            detections,
+            helmets,
+            gate=_helmet_gate(ctx),
+            conf_min=ctx.helmet_conf,
+            iou_min=HELMET_HEAD_IOU,
+            update_gate=run_yolo,
+        )
+    elif ctx.require_helmet and ctx._helmet_gate is not None:
+        ctx._helmet_gate.prune(set())
 
     team_labels = None
     if ctx.classifier is not None:

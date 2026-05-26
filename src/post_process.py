@@ -7,6 +7,8 @@ from src.config import (
     FIELD_HSV_SAT_LOW,
     FIELD_HSV_VAL_LOW,
     HUD_BOTTOM_PCT,
+    HUD_FIELD_BOTTOM_MARGIN_PX,
+    HUD_FIELD_TOP_MARGIN_PX,
     HUD_TOP_PCT,
     YARD_LINE_SAT_MAX,
     YARD_LINE_VAL_MIN,
@@ -39,14 +41,27 @@ def build_field_mask(
     return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _MORPH_KERNEL)
 
 
-def filter_hud_detections(frame_shape, xyxy, confs, track_ids):
+def _hud_limits(frame_shape, field_mask: np.ndarray | None = None) -> tuple[float, float]:
+    h = frame_shape[0]
+    if field_mask is not None and field_mask.size:
+        rows = np.where(field_mask.any(axis=1))[0]
+        if len(rows):
+            top_limit = max(0, int(rows[0]) - HUD_FIELD_TOP_MARGIN_PX)
+            bottom_limit = min(h, int(rows[-1]) + HUD_FIELD_BOTTOM_MARGIN_PX)
+            if bottom_limit > top_limit:
+                return float(top_limit), float(bottom_limit)
+
+    top_limit = h * HUD_TOP_PCT
+    bottom_limit = h - (h * HUD_BOTTOM_PCT)
+    return top_limit, bottom_limit
+
+
+def filter_hud_detections(frame_shape, xyxy, confs, track_ids, *, field_mask: np.ndarray | None = None):
     if len(xyxy) == 0:
         empty = np.array([], dtype=int)
         return np.empty((0, 4)), np.array([]), empty
 
-    h = frame_shape[0]
-    top_limit = h * HUD_TOP_PCT
-    bottom_limit = h - (h * HUD_BOTTOM_PCT)
+    top_limit, bottom_limit = _hud_limits(frame_shape, field_mask=field_mask)
     cy = (xyxy[:, 1] + xyxy[:, 3]) / 2
     keep = (cy > top_limit) & (cy < bottom_limit)
     if not np.any(keep):

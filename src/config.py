@@ -7,10 +7,12 @@ PLAYER_CLASS_ID = 0
 PLAYER_IMGSZ = 736
 PLAYER_PREDICT_CONF = 0.30
 PLAYER_PREDICT_IOU = 0.65
-PLAYER_PREDICT_MAX_DET = 30
+PLAYER_PREDICT_MAX_DET = 80
 
 HUD_TOP_PCT = 0.10
 HUD_BOTTOM_PCT = 0.15
+HUD_FIELD_TOP_MARGIN_PX = 10
+HUD_FIELD_BOTTOM_MARGIN_PX = 20
 
 FIELD_HSV_HUE_LOW = 35
 FIELD_HSV_HUE_HIGH = 85
@@ -31,22 +33,41 @@ MODEL_PATH = ROOT / "football_tracker" / "run_v1" / "weights" / "best.pt"
 
 # Segmentation model (primary)
 SEG_MODEL_PATH = ROOT / "football_tracker_seg" / "run_v2" / "weights" / "best.pt"
-SEG_DATASET_YAML = ROOT / "football_dataset_seg" / "data.yaml"
-SEG_DATASET_ROOT = ROOT / "football_dataset_seg"
+SEG_BBOX_SOURCE_ROOT = ROOT / "merged_football_dataset_v2"
+SEG_DATASET_ROOT = ROOT / "merged_football_dataset_v2_seg"
+SEG_DATASET_YAML = SEG_DATASET_ROOT / "data.yaml"
+SEG_TRAIN_MODEL = "yolo11s-seg.pt"
+SEG_MASK_RATIO = 2
+SEG_TRAIN_DEGREES = 5.0
+SEG_TRAIN_ERASING = 0.3
+SEG_TRAIN_COPY_PASTE = 0.1
+SEG_CLOSE_MOSAIC = 15
 
 DATASET_YAML = ROOT / "football_dataset" / "data.yaml"
+HELMET_DATASET_YAML = ROOT / "football_dataset_helmet" / "data.yaml"
+HELMET_MODEL_PATH = ROOT / "football_tracker_helmet" / "run_v1" / "weights" / "best.pt"
 
 # --- SAM label generation ---
-SAM_MODEL = "sam_b.pt"
-MASK_MIN_AREA_FLOOR = 300
-MASK_MIN_AREA_BOX_FRAC = 0.15
-MASK_MIN_BOX_IOU = 0.35
+SAM_MODEL = "sam_l.pt"
+MASK_MIN_AREA_FLOOR = 400
+MASK_MIN_AREA_BOX_FRAC = 0.20
+MASK_MIN_BOX_IOU = 0.50
 MASK_BOX_PAD_FRAC = 0.05
 MASK_PREVIEW_COUNT = 50
 
 # Gate 2 seg validation targets
 GATE2_MASK_MAP50 = 0.75
 GATE2_MASK_RECALL = 0.70
+GATE2_MASK_MAP75 = 0.55
+GATE2_BOX_RECALL = 0.75
+
+# Clip evaluation north-star targets
+EVAL_MIN_AVG_DETECTIONS = 18.0
+EVAL_MAX_ZERO_DET_FRAC = 0.05
+EVAL_MIN_LOCKED_PCT = 85.0
+EVAL_MAX_LABEL_FLIP_RATE = 0.10
+EVAL_MAX_LOCKED_FRAME = 900
+EVAL_MIN_TEAM_ACCURACY_PCT = 90.0
 
 # --- Team classification (TDD Part 9) ---
 WARMUP_CONF_MIN = 0.45
@@ -106,6 +127,14 @@ FIELD_REG_TEMPLATE_H = 533
 POSE_MODEL_PATH = ROOT / "yolo11n-pose.pt"
 POSE_EVERY_DEFAULT = 1
 POSE_IOU_MATCH = 0.5
+
+# Helmet verification
+HELMET_CONF = 0.35
+HELMET_HEAD_IOU = 0.15
+HEAD_ROI_FRAC = 0.28
+HELMET_GATE_WINDOW = 3
+HELMET_GATE_REQUIRED = 2
+HELMET_GATE_GRACE = 1
 
 # Tracker (default BoT-SORT + Re-ID)
 TRACKER_CFG = ROOT / "configs" / "botsort.yaml"

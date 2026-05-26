@@ -9,7 +9,20 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
-from src.config import ROOT, SEG_MODEL_PATH
+from src.config import (
+    EVAL_MAX_LABEL_FLIP_RATE,
+    EVAL_MAX_LOCKED_FRAME,
+    EVAL_MAX_ZERO_DET_FRAC,
+    EVAL_MIN_AVG_DETECTIONS,
+    EVAL_MIN_LOCKED_PCT,
+    EVAL_MIN_TEAM_ACCURACY_PCT,
+    PLAYER_IMGSZ,
+    PLAYER_PREDICT_CONF,
+    PLAYER_PREDICT_IOU,
+    PLAYER_PREDICT_MAX_DET,
+    ROOT,
+    SEG_MODEL_PATH,
+)
 from src.pipeline import VideoPipelineContext, process_video_frame
 from src.team_classifier import FootballTeamClassifier
 
@@ -22,6 +35,10 @@ def eval_clip(
     max_frames: int | None = None,
     calibration_path: str | None = None,
     annotations_path: Path | None = None,
+    player_conf: float = PLAYER_PREDICT_CONF,
+    player_iou: float = PLAYER_PREDICT_IOU,
+    player_imgsz: int = PLAYER_IMGSZ,
+    player_max_det: int = PLAYER_PREDICT_MAX_DET,
 ) -> dict:
     weights = model_path or SEG_MODEL_PATH
     if not weights.exists():
@@ -29,7 +46,14 @@ def eval_clip(
 
     model = YOLO(str(weights))
     classifier = FootballTeamClassifier()
-    ctx = VideoPipelineContext(model=model, classifier=classifier)
+    ctx = VideoPipelineContext(
+        model=model,
+        classifier=classifier,
+        player_conf=player_conf,
+        player_iou=player_iou,
+        player_imgsz=max(64, int(player_imgsz)),
+        player_max_det=max(1, int(player_max_det)),
+    )
 
     if calibration_path:
         with open(calibration_path, "rb") as f:
@@ -136,6 +160,7 @@ def eval_clip(
         "avg_detections": round(avg_dets, 2),
         "max_detections": ctx.det_stats.max_dets,
         "zero_det_frames": ctx.det_stats.zero_det_frames,
+        "zero_det_rate": round(ctx.det_stats.zero_det_frames / frame_idx, 4) if frame_idx else 0.0,
         "locked_pct": round(locked_pct, 1),
         "frames_with_team_labels_pct": round(labeled_pct, 1),
         "locked_frame_index": locked_at,
@@ -157,6 +182,10 @@ def main() -> None:
     parser.add_argument("--model", default=None)
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--calibration", default=None, help="Load saved calibration pickle")
+    parser.add_argument("--player-conf", type=float, default=PLAYER_PREDICT_CONF)
+    parser.add_argument("--player-iou", type=float, default=PLAYER_PREDICT_IOU)
+    parser.add_argument("--player-imgsz", type=int, default=PLAYER_IMGSZ)
+    parser.add_argument("--player-max-det", type=int, default=PLAYER_PREDICT_MAX_DET)
     parser.add_argument(
         "--annotations",
         default=str(DEFAULT_ANNOTATIONS),
@@ -170,22 +199,41 @@ def main() -> None:
         args.max_frames,
         args.calibration,
         Path(args.annotations) if args.annotations else None,
+        args.player_conf,
+        args.player_iou,
+        args.player_imgsz,
+        args.player_max_det,
     )
 
     print("--- Clip Evaluation ---")
     for k, v in report.items():
         print(f"  {k}: {v}")
 
-    ok_dets = report["avg_detections"] >= 18
-    ok_locked = report["locked_pct"] >= 80 or report["final_state"] == "LOCKED"
+    ok_dets = report["avg_detections"] >= EVAL_MIN_AVG_DETECTIONS
+    ok_zero = report["zero_det_rate"] <= EVAL_MAX_ZERO_DET_FRAC
+    ok_locked = report["locked_pct"] >= EVAL_MIN_LOCKED_PCT or report["final_state"] == "LOCKED"
     ok_early = (
         report["locked_frame_index"] is not None
-        and report["locked_frame_index"] < 900
+        and report["locked_frame_index"] < EVAL_MAX_LOCKED_FRAME
     ) or report["final_state"] == "LOCKED" and args.calibration
-    print(f"  Detection target (avg>=18): {'PASS' if ok_dets else 'FAIL'}")
-    print(f"  LOCKED target (>80% or final LOCKED): {'PASS' if ok_locked else 'FAIL'}")
+    ok_flips = report["label_flip_rate"] <= EVAL_MAX_LABEL_FLIP_RATE
+    team_acc = report.get("team_accuracy")
+    ok_team_acc = team_acc is None or team_acc["pct"] >= EVAL_MIN_TEAM_ACCURACY_PCT
+
+    print(f"  Detection target (avg>={EVAL_MIN_AVG_DETECTIONS:.0f}): {'PASS' if ok_dets else 'FAIL'}")
+    print(f"  Zero-det target (rate<={EVAL_MAX_ZERO_DET_FRAC:.0%}): {'PASS' if ok_zero else 'FAIL'}")
+    print(f"  LOCKED target (>={EVAL_MIN_LOCKED_PCT:.0f}% or final LOCKED): {'PASS' if ok_locked else 'FAIL'}")
+    print(f"  Label stability target (flip_rate<={EVAL_MAX_LABEL_FLIP_RATE:.2f}): {'PASS' if ok_flips else 'FAIL'}")
+    if team_acc is not None:
+        print(
+            "  Team accuracy target "
+            f"(>={EVAL_MIN_TEAM_ACCURACY_PCT:.0f}%): {'PASS' if ok_team_acc else 'FAIL'}"
+        )
     if report["locked_frame_index"] is not None:
-        print(f"  Early lock (<900 frames): {'PASS' if ok_early else 'FAIL'}")
+        print(f"  Early lock (<{EVAL_MAX_LOCKED_FRAME} frames): {'PASS' if ok_early else 'FAIL'}")
+
+    overall = ok_dets and ok_zero and ok_locked and ok_early and ok_flips and ok_team_acc
+    print(f"  North-star release gate: {'PASS' if overall else 'FAIL'}")
 
 
 if __name__ == "__main__":

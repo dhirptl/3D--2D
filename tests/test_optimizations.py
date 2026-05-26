@@ -26,7 +26,10 @@ from src.config import (
     WARMUP_VECTOR_CAP,
 )
 from src.field_registration import FieldRegistration
+from src.helmet_verify import HelmetTrackGate, head_roi, helmet_confirms_player
 from src.mask_utils import erode_mask, iou_matrix_xyxy, mask_area, match_indices
+from src.pipeline import VideoPipelineContext
+from src.post_process import filter_hud_detections
 from src.team_classifier import (
     FootballTeamClassifier,
     TemporalVoter,
@@ -162,6 +165,67 @@ def test_iou_matrix_broadcast():
     assert iou[0, 0] > 0.9
 
 
+def test_head_roi_bbox_only():
+    roi = head_roi((10, 20, 50, 120))
+    assert roi == (10, 20, 50, 48)
+
+
+def test_head_roi_pose_refined():
+    bbox = (100, 50, 140, 170)
+    keypoints = np.zeros((17, 3), dtype=np.float32)
+    keypoints[0] = [20, 20, 0.9]
+    keypoints[1] = [15, 18, 0.9]
+    keypoints[2] = [25, 18, 0.9]
+    fallback = head_roi(bbox, None)
+    roi = head_roi(bbox, keypoints)
+    assert bbox[0] <= roi[0] < roi[2] <= bbox[2]
+    assert bbox[1] <= roi[1] < roi[3] <= bbox[3]
+    assert roi != fallback
+    assert (roi[2] - roi[0]) < (fallback[2] - fallback[0])
+
+
+def test_helmet_confirms_player_center_match():
+    roi = (10, 10, 30, 30)
+    helmets = [{"bbox": (14, 14, 18, 18), "conf": 0.8}]
+    assert helmet_confirms_player(roi, helmets)
+
+
+def test_helmet_confirms_player_center_miss():
+    roi = (10, 10, 30, 30)
+    helmets = [{"bbox": (14, 40, 18, 44), "conf": 0.8}]
+    assert not helmet_confirms_player(roi, helmets)
+
+
+def test_helmet_confirms_player_iou_fallback():
+    roi = (10, 10, 30, 30)
+    helmets = [{"bbox": (24, 10, 40, 30), "conf": 0.8}]
+    assert helmet_confirms_player(roi, helmets, iou_min=0.15)
+
+
+def test_helmet_track_gate_requires_majority():
+    gate = HelmetTrackGate(window=3, required=2, grace=0)
+    assert not gate.observe(7, False)
+    assert not gate.observe(7, True)
+    assert gate.observe(7, True)
+
+
+def test_helmet_track_gate_grace():
+    gate = HelmetTrackGate(window=3, required=2, grace=1)
+    assert gate.observe(9, False)
+    assert not gate.observe(9, False)
+
+
+def test_pipeline_context_helmet_defaults():
+    ctx = VideoPipelineContext(model=None)
+    assert not ctx.require_helmet
+    assert ctx.helmet_model_path is None
+    assert ctx.helmet_conf > 0
+    assert ctx.use_helmet_gate
+    assert ctx._last_helmets == []
+    assert ctx._helmet_cache_frame == -1
+    assert ctx._helmet_gate is None
+
+
 def test_majority_vote_counter():
     voter = TemporalVoter()
     for _ in range(5):
@@ -220,8 +284,26 @@ def test_field_overlap_gate():
     clf.field_mask = np.zeros((100, 100), dtype=np.uint8)
     det_off = {"conf": 0.9, "bbox": (0, 0, 25, 35)}
     mask_off = np.zeros((35, 25), dtype=np.uint8)
-    mask_off[5:30, 5:20] = 255
+    mask_off[:, :] = 255
     assert clf._quality_gate_reason(det_off, mask_off) == "not_on_field"
+
+
+def test_adaptive_hud_filter_uses_field_mask():
+    xyxy = np.array([[0, 5, 10, 15], [0, 85, 10, 95], [0, 45, 10, 55]], dtype=float)
+    confs = np.array([0.9, 0.9, 0.9], dtype=float)
+    tids = np.array([1, 2, 3], dtype=int)
+    field_mask = np.zeros((100, 20), dtype=np.uint8)
+    field_mask[40:60, :] = 255
+    kept_xyxy, kept_confs, kept_ids = filter_hud_detections(
+        (100, 20, 3),
+        xyxy,
+        confs,
+        tids,
+        field_mask=field_mask,
+    )
+    assert kept_xyxy.shape == (1, 4)
+    assert kept_confs.shape == (1,)
+    assert kept_ids.tolist() == [3]
 
 
 def test_warmup_per_track_cap():
@@ -349,12 +431,21 @@ if __name__ == "__main__":
     test_erode_mask()
     test_iou_match_unique()
     test_iou_matrix_broadcast()
+    test_head_roi_bbox_only()
+    test_head_roi_pose_refined()
+    test_helmet_confirms_player_center_match()
+    test_helmet_confirms_player_center_miss()
+    test_helmet_confirms_player_iou_fallback()
+    test_helmet_track_gate_requires_majority()
+    test_helmet_track_gate_grace()
+    test_pipeline_context_helmet_defaults()
     test_majority_vote_counter()
     test_normalize_batch_features()
     test_prefilter_drops_neutral()
     test_is_referee_lab()
     test_adaptive_margin()
     test_field_overlap_gate()
+    test_adaptive_hud_filter_uses_field_mask()
     test_warmup_per_track_cap()
     test_quality_eviction_drops_worst()
     test_load_calibration_version_mismatch()

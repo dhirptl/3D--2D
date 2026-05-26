@@ -18,17 +18,20 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 FD = ROOT / "football_dataset"
 OUT = ROOT / "merged_football_dataset_v2"
+HARD_NEG = FD / "hard_negatives"
 
-# (source_dir, dest_split) pairs — all Roboflow train/* → train, valid+test → val
-SOURCES: list[tuple[Path, str]] = [
-    (FD / "American football" / "train", "train"),
-    (FD / "American football" / "valid", "val"),
-    (FD / "American football" / "test",  "val"),
-    (FD / "BallGame3" / "train",          "train"),
-    (FD / "BallGame3" / "valid",          "val"),
-    (FD / "BallGame3" / "test",           "val"),
-    (FD / "train",                         "train"),
-    (FD / "valid",                         "val"),
+# (source_dir, dest_split, allow_empty) pairs — all Roboflow train/* → train, valid+test → val
+SOURCES: list[tuple[Path, str, bool]] = [
+    (FD / "American football" / "train", "train", False),
+    (FD / "American football" / "valid", "val", False),
+    (FD / "American football" / "test",  "val", False),
+    (FD / "BallGame3" / "train",          "train", False),
+    (FD / "BallGame3" / "valid",          "val", False),
+    (FD / "BallGame3" / "test",           "val", False),
+    (FD / "train",                         "train", False),
+    (FD / "valid",                         "val", False),
+    (HARD_NEG / "train",                  "train", True),
+    (HARD_NEG / "val",                    "val", True),
 ]
 
 
@@ -61,8 +64,9 @@ def main() -> None:
     buckets: dict[str, dict[str, tuple[Path, list[str]]]] = {"train": {}, "val": {}}
     skipped_no_image = 0
     skipped_referee_only = 0
+    added_hard_negatives = 0
 
-    for src_dir, dest_split in SOURCES:
+    for src_dir, dest_split, allow_empty in SOURCES:
         lbl_dir = src_dir / "labels"
         img_dir = src_dir / "images"
         if not lbl_dir.exists():
@@ -82,11 +86,13 @@ def main() -> None:
                 continue
 
             lines = clean_label(lbl_path)
-            if not lines:
+            if not lines and not allow_empty:
                 skipped_referee_only += 1
                 continue
 
             bucket[stem] = (img_path, lines)
+            if allow_empty and not lines:
+                added_hard_negatives += 1
             added += 1
 
         print(f"  {src_dir.relative_to(ROOT)} → {dest_split}: +{added} images")
@@ -126,6 +132,7 @@ def main() -> None:
     print(f"  train: {n_train}  val: {n_val}  total: {total}")
     print(f"  skipped (no image): {skipped_no_image}")
     print(f"  skipped (referee-only): {skipped_referee_only}")
+    print(f"  hard negatives added: {added_hard_negatives}")
     print(f"  data.yaml: {OUT / 'data.yaml'}")
 
 

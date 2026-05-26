@@ -1,4 +1,4 @@
-"""Write football_dataset_seg/data.yaml after SAM label generation."""
+"""Write the active seg dataset data.yaml after SAM label generation."""
 
 from pathlib import Path
 
