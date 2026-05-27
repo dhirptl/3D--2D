@@ -52,16 +52,20 @@ def match_indices(filtered_xyxy: np.ndarray, orig_xyxy: np.ndarray) -> list[int]
     used_orig: set[int] = set()
     indices: list[int] = []
     for i in range(n_f):
+        best = int(np.argmax(iou[i]))
+        if best not in used_orig:
+            indices.append(best)
+            used_orig.add(best)
+            continue
+        # Best already taken — fall back to sorted scan
         order = np.argsort(-iou[i])
-        chosen = 0
+        chosen = int(order[0])
         for j in order:
             j = int(j)
             if j not in used_orig:
                 chosen = j
                 used_orig.add(j)
                 break
-        else:
-            chosen = int(order[0])
         indices.append(chosen)
     return indices
 
@@ -73,7 +77,9 @@ def mask_to_full_frame(mask_tensor, shape_hw: tuple[int, int]) -> np.ndarray:
         m = m[0]
     if m.shape != (h, w):
         m = cv2.resize(m.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-    return (m > 0.5).astype(np.uint8) * 255
+    # Ultralytics may emit binary masks as 0/1 or 0/255 depending on backend/version.
+    thresh = 0.5 if float(np.max(m)) <= 1.0 else 127.0
+    return (m > thresh).astype(np.uint8) * 255
 
 
 def mask_from_polygon(polygon_xy: np.ndarray, shape_hw: tuple[int, int]) -> np.ndarray:

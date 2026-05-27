@@ -16,6 +16,10 @@ from src.config import (
     EVAL_MIN_AVG_DETECTIONS,
     EVAL_MIN_LOCKED_PCT,
     EVAL_MIN_TEAM_ACCURACY_PCT,
+    HELMET_CONF,
+    HELMET_EVERY_DEFAULT,
+    HELMET_GATE_GRACE,
+    HELMET_MODEL_PATH,
     PLAYER_IMGSZ,
     PLAYER_PREDICT_CONF,
     PLAYER_PREDICT_IOU,
@@ -39,10 +43,23 @@ def eval_clip(
     player_iou: float = PLAYER_PREDICT_IOU,
     player_imgsz: int = PLAYER_IMGSZ,
     player_max_det: int = PLAYER_PREDICT_MAX_DET,
+    require_helmet: bool = True,
+    helmet_model_path: Path | None = None,
+    helmet_conf: float = HELMET_CONF,
+    helmet_every: int = HELMET_EVERY_DEFAULT,
+    use_helmet_gate: bool = True,
+    helmet_gate_grace: int = HELMET_GATE_GRACE,
 ) -> dict:
     weights = model_path or SEG_MODEL_PATH
     if not weights.exists():
         raise FileNotFoundError(f"Seg model not found: {weights}")
+    helmet_weights = helmet_model_path or HELMET_MODEL_PATH
+    if require_helmet and not helmet_weights.exists():
+        raise FileNotFoundError(
+            "Helmet model not found: "
+            f"{helmet_weights}. Run: python -m src.prepare_helmet_dataset "
+            "&& python -m src.train_helmet_detector"
+        )
 
     model = YOLO(str(weights))
     classifier = FootballTeamClassifier()
@@ -53,6 +70,12 @@ def eval_clip(
         player_iou=player_iou,
         player_imgsz=max(64, int(player_imgsz)),
         player_max_det=max(1, int(player_max_det)),
+        require_helmet=require_helmet,
+        helmet_model_path=helmet_weights,
+        helmet_conf=helmet_conf,
+        helmet_every=max(1, int(helmet_every)),
+        use_helmet_gate=use_helmet_gate,
+        helmet_gate_grace=max(0, helmet_gate_grace),
     )
 
     if calibration_path:
@@ -186,6 +209,12 @@ def main() -> None:
     parser.add_argument("--player-iou", type=float, default=PLAYER_PREDICT_IOU)
     parser.add_argument("--player-imgsz", type=int, default=PLAYER_IMGSZ)
     parser.add_argument("--player-max-det", type=int, default=PLAYER_PREDICT_MAX_DET)
+    parser.add_argument("--no-helmet", action="store_true")
+    parser.add_argument("--helmet-model", default=None)
+    parser.add_argument("--helmet-conf", type=float, default=HELMET_CONF)
+    parser.add_argument("--helmet-every", type=int, default=HELMET_EVERY_DEFAULT)
+    parser.add_argument("--no-helmet-gate", action="store_true")
+    parser.add_argument("--helmet-gate-grace", type=int, default=HELMET_GATE_GRACE)
     parser.add_argument(
         "--annotations",
         default=str(DEFAULT_ANNOTATIONS),
@@ -203,6 +232,12 @@ def main() -> None:
         args.player_iou,
         args.player_imgsz,
         args.player_max_det,
+        not args.no_helmet,
+        Path(args.helmet_model) if args.helmet_model else None,
+        args.helmet_conf,
+        args.helmet_every,
+        not args.no_helmet_gate,
+        args.helmet_gate_grace,
     )
 
     print("--- Clip Evaluation ---")

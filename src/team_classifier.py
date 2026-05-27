@@ -48,10 +48,16 @@ from src.config import (
     SIMILAR_COLOR_AVG_DIST_THRESHOLD,
     SIMILAR_COLOR_WARN_ATTEMPTS,
     SOFT_LOCK_THRESHOLD,
+    SPATIAL_CONF_MIN,
+    SPATIAL_MAX_SPREAD_FRAC,
+    SPATIAL_MIN_GROUP_SIZE,
+    SPATIAL_MIN_PLAYERS,
+    SPATIAL_MIN_REL_SEPARATION,
     TEAM_REF_AB_STD_MAX,
     TEAM_REF_MAX_MASK_AREA,
     TEAM_REF_MIN_ASPECT,
     UPPER_BODY_FRAC,
+    WARMUP_CONF_HELMET,
     WARMUP_CONF_MIN,
     WARMUP_CONF_RELAXED,
     WARMUP_CONF_RELAX_AFTER_FAILS,
@@ -64,7 +70,9 @@ from src.config import (
     WARMUP_SOFT_LOCK_THRESHOLD,
     WARMUP_TIMEOUT_MIN_VECTORS,
     WARMUP_VECTOR_CAP,
+    FIELD_REG_TEMPLATE_H,
 )
+from src.field_registration import project_feet_to_field
 from src.mask_utils import mask_area
 
 _LAB_NEUTRAL = 128.0
@@ -308,6 +316,7 @@ class FootballTeamClassifier:
         self.centroid_dist: float | None = None
         self.voter = TemporalVoter()
         self.field_mask: np.ndarray | None = None
+        self.homography: np.ndarray | None = None
         self.cal_log = CalibrationLog()
         self.cal_fail_count = 0
         self.centroid_threshold = MINIMUM_CENTROID_DISTANCE
@@ -387,6 +396,17 @@ class FootballTeamClassifier:
 
         all_bboxes = [tuple(d["bbox"]) for d in detections]
 
+        if (
+            self.state == self.STATE_WARMUP
+            and self.homography is not None
+            and detections
+            and self.frame_idx % 15 == 0
+        ):
+            self._try_spatial_calibration(frame_bgr, detections)
+
+        if self.state == self.STATE_WARMUP:
+            self._warmup_frame_tick()
+
         for det in detections:
             track_id = det["track_id"]
             mask = det["mask"]
@@ -430,7 +450,6 @@ class FootballTeamClassifier:
                 continue
 
             if self.state == self.STATE_WARMUP:
-                self._warmup_frame_tick()
                 reject = self._try_add_warmup_sample(track_id, det, mask, raw_feat, conf)
                 if reject:
                     self.last_frame_debug[track_id] = {"reject": reject}
@@ -438,37 +457,14 @@ class FootballTeamClassifier:
                 results[track_id] = self._preview_label(raw_feat, track_id)
 
             elif self.state == self.STATE_LOCKED:
-                assert self.scaler is not None
-                assert self.centroid_team0 is not None
-                assert self.centroid_team1 is not None
-                feat = normalize_features(raw_feat, self.scaler)
-                label, dist0, dist1 = classify_player(
-                    feat, self.centroid_team0, self.centroid_team1
+                results[track_id] = self._classify_locked_detection(
+                    track_id,
+                    det,
+                    raw_feat,
+                    mask,
+                    bbox,
+                    all_bboxes,
                 )
-                debug_extra = {}
-                if det.get("_turf_sub_skipped"):
-                    debug_extra["turf_sub_skipped"] = True
-                if self.post_cut_frames > 0:
-                    results[track_id] = label
-                    self.voter.last_label[track_id] = label
-                else:
-                    voted = self.voter.update(
-                        track_id,
-                        label,
-                        dist0,
-                        dist1,
-                        bbox=tuple(bbox),
-                        all_bboxes=all_bboxes,
-                        mask_area_val=mask_area(mask),
-                    )
-                    results[track_id] = voted
-                self.last_frame_debug[track_id] = {
-                    "dist0": dist0,
-                    "dist1": dist1,
-                    "margin": abs(dist0 - dist1),
-                    "raw_label": label,
-                    **debug_extra,
-                }
 
         if self.post_cut_frames > 0:
             self.post_cut_frames -= 1
@@ -481,6 +477,48 @@ class FootballTeamClassifier:
             self.rejection_log.clear()
 
         return results
+
+    def _classify_locked_detection(
+        self,
+        track_id: int,
+        det: dict,
+        raw_feat: np.ndarray,
+        mask: np.ndarray,
+        bbox: tuple[int, int, int, int],
+        all_bboxes: list[tuple[int, int, int, int]],
+    ) -> int:
+        assert self.scaler is not None
+        assert self.centroid_team0 is not None
+        assert self.centroid_team1 is not None
+
+        feat = normalize_features(raw_feat, self.scaler)
+        label, dist0, dist1 = classify_player(
+            feat, self.centroid_team0, self.centroid_team1
+        )
+        debug_extra = {}
+        if det.get("_turf_sub_skipped"):
+            debug_extra["turf_sub_skipped"] = True
+        if self.post_cut_frames > 0:
+            result = label
+            self.voter.last_label[track_id] = label
+        else:
+            result = self.voter.update(
+                track_id,
+                label,
+                dist0,
+                dist1,
+                bbox=tuple(bbox),
+                all_bboxes=all_bboxes,
+                mask_area_val=mask_area(mask),
+            )
+        self.last_frame_debug[track_id] = {
+            "dist0": dist0,
+            "dist1": dist1,
+            "margin": abs(dist0 - dist1),
+            "raw_label": label,
+            **debug_extra,
+        }
+        return result
 
     def _warmup_frame_tick(self) -> None:
         self.frames_in_warmup += 1
@@ -556,13 +594,15 @@ class FootballTeamClassifier:
         return None
 
     def _quality_gate_reason(self, det: dict, mask: np.ndarray) -> str | None:
-        if det["conf"] < self._effective_conf_min():
+        helmet_confirmed = det.get("helmet_confirmed", False)
+        conf_min = WARMUP_CONF_HELMET if helmet_confirmed else self._effective_conf_min()
+        if det["conf"] < conf_min:
             return "low_conf"
         if mask_area(mask) < MASK_MIN_AREA_FLOOR:
             return "small_mask"
         if self._upper_mask_pixels(det, mask) < MIN_UPPER_MASK_PIXELS:
             return "few_upper_pixels"
-        if self.field_hsv_ready and self.field_mask is not None:
+        if not helmet_confirmed and self.field_hsv_ready and self.field_mask is not None:
             if self._mask_field_overlap(det, mask) < FIELD_MASK_MIN_FRAC:
                 return "not_on_field"
         return None
@@ -637,6 +677,100 @@ class FootballTeamClassifier:
         self.voter.reset()
         if self.centroid_dist:
             self.voter.set_margins(self.centroid_dist, warmup=False)
+
+    def _try_spatial_calibration(
+        self,
+        frame_bgr: np.ndarray,
+        detections: list[dict],
+    ) -> bool:
+        """Try locking from pre-snap spatial separation in template coordinates."""
+        if self.homography is None:
+            return False
+        if len(detections) < SPATIAL_MIN_PLAYERS:
+            return False
+
+        labeled: list[tuple[float, np.ndarray]] = []
+        for det in detections:
+            if det["conf"] < SPATIAL_CONF_MIN:
+                continue
+            if det.get("frame_age", 0) > 0:
+                continue
+            pos = project_feet_to_field(tuple(det["bbox"]), self.homography)
+            if pos is None:
+                continue
+            feat = build_raw_lab4d_vector(
+                frame_bgr,
+                det["mask"],
+                det["bbox"],
+                field_mask=self.field_mask,
+                det=det,
+                keypoints=det.get("keypoints"),
+            )
+            if feat is None:
+                continue
+            if is_referee(feat, bbox=tuple(det["bbox"]), mask=det["mask"]):
+                continue
+            labeled.append((pos[1], feat))
+
+        if len(labeled) < SPATIAL_MIN_PLAYERS:
+            return False
+
+        field_ys = np.array([item[0] for item in labeled], dtype=np.float64).reshape(-1, 1)
+        player_range = float(field_ys.max() - field_ys.min())
+        if player_range <= 0.0:
+            return False
+        if player_range > FIELD_REG_TEMPLATE_H * SPATIAL_MAX_SPREAD_FRAC:
+            return False
+
+        km_spatial = KMeans(n_clusters=2, n_init=5, random_state=0)
+        km_spatial.fit(field_ys)
+        labels = km_spatial.labels_
+        centers = km_spatial.cluster_centers_.flatten()
+        separation = abs(float(centers[0] - centers[1]))
+        relative_sep = separation / player_range
+
+        if relative_sep < SPATIAL_MIN_REL_SEPARATION:
+            print(
+                f"[spatial] relative separation {relative_sep:.2f} "
+                f"< {SPATIAL_MIN_REL_SEPARATION:.2f} - skipping"
+            )
+            return False
+
+        group0 = [labeled[i][1] for i in range(len(labeled)) if labels[i] == 0]
+        group1 = [labeled[i][1] for i in range(len(labeled)) if labels[i] == 1]
+        if len(group0) < SPATIAL_MIN_GROUP_SIZE or len(group1) < SPATIAL_MIN_GROUP_SIZE:
+            return False
+
+        vecs0 = np.stack(group0)
+        vecs1 = np.stack(group1)
+        all_vecs = np.vstack([vecs0, vecs1])
+
+        self.scaler = StandardScaler()
+        self.scaler.fit(all_vecs[:, SCALER_LAB_COLS])
+
+        c0 = normalize_batch_features(vecs0, self.scaler).mean(axis=0)
+        c1 = normalize_batch_features(vecs1, self.scaler).mean(axis=0)
+        dist = float(np.linalg.norm(c0 - c1))
+        if dist <= self.centroid_threshold:
+            print(
+                f"[spatial] centroid dist {dist:.2f} <= "
+                f"{self.centroid_threshold:.2f} - skipping"
+            )
+            return False
+
+        self.centroid_team0 = c0
+        self.centroid_team1 = c1
+        self.preview_centroids = (c0, c1)
+        self.centroid_dist = dist
+        self.state = self.STATE_LOCKED
+        self.locked_frame_index = self.frame_idx
+        self._reset_voter_on_lock()
+        print(
+            f"[spatial] locked at frame {self.frame_idx} - "
+            f"rel_sep {relative_sep:.2f}, dist {dist:.2f}"
+        )
+        self.cal_log.events.append(f"Spatial lock at frame {self.frame_idx}")
+        return True
 
     def _calibrate(self) -> bool:
         if self._calibrating:

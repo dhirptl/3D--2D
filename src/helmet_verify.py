@@ -12,7 +12,9 @@ from src.config import (
     HEAD_ROI_FRAC,
     HELMET_CONF,
     HELMET_GATE_GRACE,
+    HELMET_GATE_LOCKED_REQUIRED,
     HELMET_GATE_REQUIRED,
+    HELMET_GATE_SOFT_LOCK_STREAK,
     HELMET_GATE_WINDOW,
     HELMET_HEAD_IOU,
 )
@@ -104,6 +106,66 @@ def detect_helmets(
     return helmets
 
 
+def detect_helmets_roi(
+    model: YOLO,
+    frame: np.ndarray,
+    detections: list[dict],
+    *,
+    conf: float = HELMET_CONF,
+    pad_frac: float = 0.5,
+) -> list[dict]:
+    """Run the helmet model on padded head crops and return full-frame boxes."""
+    if not detections:
+        return []
+
+    fh, fw = frame.shape[:2]
+    crops: list[np.ndarray] = []
+    offsets: list[tuple[int, int, int, int]] = []
+
+    for det in detections:
+        x1, y1, x2, y2 = head_roi(det["bbox"], det.get("keypoints"))
+        roi_w = max(1, x2 - x1)
+        roi_h = max(1, y2 - y1)
+        pad_x = int(roi_w * pad_frac)
+        pad_y = int(roi_h * pad_frac)
+        cx1 = max(0, x1 - pad_x)
+        cy1 = max(0, y1 - pad_y)
+        cx2 = min(fw, x2 + pad_x)
+        cy2 = min(fh, y2 + pad_y)
+        crop = frame[cy1:cy2, cx1:cx2]
+        if crop.size == 0:
+            continue
+        crops.append(crop)
+        offsets.append((cx1, cy1, cx2, cy2))
+
+    if not crops:
+        return []
+
+    results = model.predict(crops, conf=conf, verbose=False)
+    helmets: list[dict] = []
+    for result, (ox1, oy1, ox2, oy2) in zip(results, offsets):
+        if result.boxes is None or len(result.boxes) == 0:
+            continue
+        for box, score in zip(
+            result.boxes.xyxy.cpu().numpy(),
+            result.boxes.conf.cpu().numpy(),
+        ):
+            bx1, by1, bx2, by2 = _clip_box(
+                float(box[0]) + ox1,
+                float(box[1]) + oy1,
+                float(box[2]) + ox1,
+                float(box[3]) + oy1,
+                (0, 0, fw, fh),
+            )
+            if bx2 <= bx1 or by2 <= by1:
+                continue
+            helmets.append({
+                "bbox": (bx1, by1, bx2, by2),
+                "conf": float(score),
+            })
+    return helmets
+
+
 def _box_iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> float:
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
@@ -157,10 +219,14 @@ class HelmetTrackGate:
     window: int = HELMET_GATE_WINDOW
     required: int = HELMET_GATE_REQUIRED
     grace: int = HELMET_GATE_GRACE
+    soft_lock_streak: int = HELMET_GATE_SOFT_LOCK_STREAK
+    locked_required: int = HELMET_GATE_LOCKED_REQUIRED
     history: dict[int, deque[bool]] = field(
         default_factory=lambda: defaultdict(lambda: deque(maxlen=HELMET_GATE_WINDOW))
     )
     seen: dict[int, int] = field(default_factory=dict)
+    confirmed_streak: dict[int, int] = field(default_factory=dict)
+    soft_locked: dict[int, bool] = field(default_factory=dict)
     last_decision: dict[int, bool] = field(default_factory=dict)
 
     def observe(self, track_id: int, confirmed: bool) -> bool:
@@ -171,7 +237,22 @@ class HelmetTrackGate:
         hist.append(bool(confirmed))
         seen = self.seen.get(track_id, 0) + 1
         self.seen[track_id] = seen
-        decision = seen <= self.grace or sum(hist) >= self.required
+
+        streak = self.confirmed_streak.get(track_id, 0)
+        if confirmed:
+            streak += 1
+        else:
+            streak = 0
+        self.confirmed_streak[track_id] = streak
+        if streak >= self.soft_lock_streak:
+            self.soft_locked[track_id] = True
+
+        confirmed_count = sum(hist)
+        if self.soft_locked.get(track_id) and confirmed_count == 0:
+            self.soft_locked.pop(track_id, None)
+
+        required = self.locked_required if self.soft_locked.get(track_id, False) else self.required
+        decision = seen <= self.grace or confirmed_count >= required
         self.last_decision[track_id] = decision
         return decision
 
@@ -187,6 +268,8 @@ class HelmetTrackGate:
         for track_id in stale:
             self.history.pop(track_id, None)
             self.seen.pop(track_id, None)
+            self.confirmed_streak.pop(track_id, None)
+            self.soft_locked.pop(track_id, None)
             self.last_decision.pop(track_id, None)
 
 

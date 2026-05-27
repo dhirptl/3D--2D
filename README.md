@@ -97,9 +97,10 @@ Guidance:
 | `--pipeline-threads N` | Read-ahead decode threads (default 4) |
 | `--no-prefetch` | Disable async frame prefetch |
 | `--hue-weight` | Deprecated (LAB features); ignored |
-| `--require-helmet` | Keep only tracked detections with a matching helmet near the head |
+| `--no-helmet` | Disable default helmet verification |
 | `--helmet-model PATH` | Override helmet detector weights |
 | `--helmet-conf FLOAT` | Helmet detector confidence threshold |
+| `--helmet-every N` | Run helmet verification every N detection frames |
 | `--no-helmet-gate` | Disable temporal smoothing for helmet verification |
 | `--helmet-gate-grace N` | Allow N initial frames before helmet confirmation is required |
 
@@ -135,20 +136,20 @@ python -m src.prepare_helmet_dataset
 python -m src.train_helmet_detector --epochs 50
 ```
 
-Run tracking with both field and helmet filtering enabled:
+Helmet verification is on by default. Run tracking with field filtering enabled:
 
 ```bash
 python -m src.run_tracker \
   --source outputs/arz_nyj_1min.mov \
   --out outputs/arz_nyj_1min_teams_helmet.mp4 \
-  --require-helmet \
   --filter-field
 ```
 
 Notes:
 
 - `Helmet-Sideline` labels are excluded during dataset prep so the detector does not learn sideline helmet clusters as positives.
-- `--filter-field` is recommended together with `--require-helmet`, because sideline staff or benched players may still wear helmets.
+- `--filter-field` is recommended together with default helmet verification, because sideline staff or benched players may still wear helmets.
+- Use `--no-helmet` when you explicitly want to evaluate the old behavior without helmet gating.
 - Set `--helmet-gate-grace 0` for stricter offline analysis where you do not want tracks rendered before confirmation.
 
 ## Team tuning (`src/config.py`)

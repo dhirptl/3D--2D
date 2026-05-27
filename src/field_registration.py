@@ -4,23 +4,32 @@ import cv2
 import numpy as np
 
 from src.config import (
+    FIELD_HSV_HUE_HIGH,
+    FIELD_HSV_HUE_LOW,
+    FIELD_HSV_SAT_LOW,
+    FIELD_HSV_VAL_LOW,
     FIELD_REG_MAX_REPROJ_ERR,
     FIELD_REG_MIN_INLIERS,
     FIELD_REG_TEMPLATE_H,
     FIELD_REG_TEMPLATE_W,
     FIELD_REG_VALID_STREAK,
+    FIELD_ROI_X0_FRAC,
+    FIELD_ROI_X1_FRAC,
+    FIELD_ROI_Y0_FRAC,
+    FIELD_ROI_Y1_FRAC,
     YARD_LINE_SAT_MAX,
     YARD_LINE_VAL_MIN,
 )
-from src.post_process import build_field_mask
 
 # NFL field: 120 yd x 53.33 yd (template pixels)
 _TEMPLATE_W = FIELD_REG_TEMPLATE_W
 _TEMPLATE_H = FIELD_REG_TEMPLATE_H
+_HOUGH_MAX_W = 640  # downsample width before Canny+Hough for speed
 
 
-def _yard_line_mask(frame: np.ndarray) -> np.ndarray:
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+def _yard_line_mask(frame: np.ndarray, hsv: np.ndarray | None = None) -> np.ndarray:
+    if hsv is None:
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     line_lower = np.array([0, 0, YARD_LINE_VAL_MIN])
     line_upper = np.array([179, YARD_LINE_SAT_MAX, 255])
     lines = cv2.inRange(hsv, line_lower, line_upper)
@@ -28,36 +37,67 @@ def _yard_line_mask(frame: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(lines, cv2.MORPH_CLOSE, kernel)
 
 
-def _detect_line_segments(line_mask: np.ndarray) -> list[tuple[float, float, float, float]]:
-    edges = cv2.Canny(line_mask, 50, 150)
+def _detect_line_segments(
+    frame: np.ndarray, line_mask: np.ndarray
+) -> list[tuple[float, float, float, float]]:
+    fh, fw = frame.shape[:2]
+    scale = _HOUGH_MAX_W / fw if fw > _HOUGH_MAX_W else 1.0
+    if scale < 1.0:
+        dw, dh = int(fw * scale), int(fh * scale)
+        work_frame = cv2.resize(frame,     (dw, dh))
+        work_mask  = cv2.resize(line_mask, (dw, dh), interpolation=cv2.INTER_NEAREST)
+    else:
+        work_frame, work_mask = frame, line_mask
+    gray  = cv2.cvtColor(work_frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    edges = cv2.bitwise_and(edges, work_mask)
+    min_len = work_frame.shape[1] // 8
     segs = cv2.HoughLinesP(
         edges,
         rho=1,
         theta=np.pi / 180,
         threshold=80,
-        minLineLength=line_mask.shape[1] // 8,
+        minLineLength=min_len,
         maxLineGap=20,
     )
     if segs is None:
         return []
-    out = []
-    for s in segs:
-        x1, y1, x2, y2 = s[0]
-        out.append((float(x1), float(y1), float(x2), float(y2)))
-    return out
+    inv = 1.0 / scale
+    return [
+        (x1 * inv, y1 * inv, x2 * inv, y2 * inv)
+        for x1, y1, x2, y2 in segs[:, 0]
+    ]
 
 
 def _classify_segments(
     segments: list[tuple[float, float, float, float]],
 ) -> tuple[list, list]:
+    if not segments:
+        return [], []
+
+    angles = [
+        abs(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+        for x1, y1, x2, y2 in segments
+    ]
+
+    # Find the dominant direction for each class by clustering around
+    # the median of the roughly-horizontal and roughly-vertical subsets.
+    # This lets the classifier adapt to tilted camera angles instead of
+    # using fixed 25° / 65° cutoffs.
+    near_horiz = [a for a in angles if a < 45 or a > 135]
+    near_vert  = [a for a in angles if 45 <= a <= 135]
+    h_center = float(np.median(near_horiz)) if near_horiz else 0.0
+    v_center = float(np.median(near_vert))  if near_vert  else 90.0
+    tol = 20.0
+
     horiz, vert = [], []
-    for x1, y1, x2, y2 in segments:
-        dx, dy = x2 - x1, y2 - y1
-        angle = abs(np.degrees(np.arctan2(dy, dx)))
-        if angle < 25 or angle > 155:
-            horiz.append((x1, y1, x2, y2))
-        elif 65 < angle < 115:
-            vert.append((x1, y1, x2, y2))
+    for seg, angle in zip(segments, angles):
+        dh = min(abs(angle - h_center), 180.0 - abs(angle - h_center))
+        dv = abs(angle - v_center)
+        if dh < tol:
+            horiz.append(seg)
+        elif dv < tol:
+            vert.append(seg)
     return horiz, vert
 
 
@@ -76,43 +116,56 @@ def _match_points(
     if len(horiz) < 2:
         return np.empty((0, 2)), np.empty((0, 2))
 
-    horiz_sorted = sorted(horiz, key=lambda s: (_line_y_at_x(s, fw / 2)))
+    horiz_sorted = sorted(horiz, key=lambda s: _line_y_at_x(s, fw / 2))
     n_h = min(len(horiz_sorted), 8)
-    step_y = _TEMPLATE_H / max(n_h - 1, 1)
+    if n_h < 2:
+        return np.empty((0, 2)), np.empty((0, 2))
+
+    mid_x = fw / 2
+    top_y    = _line_y_at_x(horiz_sorted[0],       mid_x)
+    bottom_y = _line_y_at_x(horiz_sorted[n_h - 1], mid_x)
+    frame_span_px = max(bottom_y - top_y, 1.0)
+
+    # Scale the observed pixel span to the template proportionally.
+    # We don't know which yard lines are visible, so we assume uniform
+    # spacing and map the visible band to a matching fraction of template height.
+    field_frac    = min(frame_span_px / float(fh), 0.95)
+    template_span = _TEMPLATE_H * field_frac
+    t_top         = (_TEMPLATE_H - template_span) / 2.0
+    step_y        = template_span / (n_h - 1)
 
     src_pts = []
     dst_pts = []
-    mid_x = fw / 2
     for i, seg in enumerate(horiz_sorted[:n_h]):
         y = _line_y_at_x(seg, mid_x)
         src_pts.append([mid_x, y])
-        dst_pts.append([_TEMPLATE_W / 2, i * step_y])
+        dst_pts.append([_TEMPLATE_W / 2, t_top + i * step_y])
         # Spread each yard line to left/right edges for stable homography
         for x_frac, t_x in ((0.15, 0.1), (0.85, 0.9)):
             x = fw * x_frac
             src_pts.append([x, _line_y_at_x(seg, x)])
-            dst_pts.append([_TEMPLATE_W * t_x, i * step_y])
+            dst_pts.append([_TEMPLATE_W * t_x, t_top + i * step_y])
 
     if vert:
         for seg in vert[:2]:
-            x = (seg[0] + seg[2]) / 2
-            src_pts.append([x, fh * 0.5])
-            dst_pts.append([_TEMPLATE_W * 0.1, _TEMPLATE_H / 2])
-            src_pts.append([x, fh * 0.55])
-            dst_pts.append([_TEMPLATE_W * 0.9, _TEMPLATE_H / 2])
+            x_mid = (seg[0] + seg[2]) / 2
+            # Map to the nearest sideline column on the template.
+            # A line in the left 40% of frame → left edge (x=0), else right edge.
+            template_x = 0.0 if x_mid < fw * 0.4 else float(_TEMPLATE_W)
+            for y_frac in (0.35, 0.65):
+                src_pts.append([x_mid, fh * y_frac])
+                dst_pts.append([template_x, _TEMPLATE_H * y_frac])
 
     return np.array(src_pts, dtype=np.float32), np.array(dst_pts, dtype=np.float32)
 
 
 def _field_template_polygon() -> np.ndarray:
-    """Playable rectangle on template (full field)."""
-    margin_x = _TEMPLATE_W * 0.05
-    margin_y = _TEMPLATE_H * 0.08
+    """Playable rectangle on template (full field including end zones)."""
     return np.array([
-        [margin_x, margin_y],
-        [_TEMPLATE_W - margin_x, margin_y],
-        [_TEMPLATE_W - margin_x, _TEMPLATE_H - margin_y],
-        [margin_x, _TEMPLATE_H - margin_y],
+        [0.0,         0.0],
+        [_TEMPLATE_W, 0.0],
+        [_TEMPLATE_W, _TEMPLATE_H],
+        [0.0,         _TEMPLATE_H],
     ], dtype=np.float32)
 
 
@@ -123,13 +176,22 @@ class FieldRegistration:
         self.homography: np.ndarray | None = None
         self.registration_valid = False
         self.valid_streak = 0
+        self.homography_stale = False
         self.reproj_error: float | None = None
         self.inlier_count = 0
 
-    def update(self, frame: np.ndarray) -> bool:
+    def reset(self) -> None:
+        self.homography = None
+        self.registration_valid = False
+        self.valid_streak = 0
+        self.homography_stale = False
+        self.reproj_error = None
+        self.inlier_count = 0
+
+    def update(self, frame: np.ndarray, *, hsv: np.ndarray | None = None) -> bool:
         fh, fw = frame.shape[:2]
-        line_mask = _yard_line_mask(frame)
-        segments = _detect_line_segments(line_mask)
+        line_mask = _yard_line_mask(frame, hsv)
+        segments = _detect_line_segments(frame, line_mask)
         horiz, vert = _classify_segments(segments)
         src, dst = _match_points(horiz, vert, fh, fw)
 
@@ -152,6 +214,7 @@ class FieldRegistration:
             return False
 
         self.homography = H
+        self.homography_stale = False
         self.reproj_error = mean_err
         self.inlier_count = int(inliers.sum())
         self.valid_streak += 1
@@ -160,11 +223,14 @@ class FieldRegistration:
 
     def _invalidate_streak(self) -> None:
         self.valid_streak = max(0, self.valid_streak - 1)
+        self.homography_stale = True
         if self.valid_streak == 0:
             self.registration_valid = False
 
     def playable_mask(self, h: int, w: int) -> np.ndarray | None:
         if not self.registration_valid or self.homography is None:
+            return None
+        if self.homography_stale:
             return None
         poly_t = _field_template_polygon()
         try:
@@ -177,9 +243,46 @@ class FieldRegistration:
         return mask
 
 
-def center_roi_green_fraction(frame: np.ndarray) -> float:
+def project_feet_to_field(
+    bbox: tuple[int, int, int, int],
+    homography: np.ndarray,
+) -> tuple[float, float] | None:
+    """Project bbox bottom-center into field-template coordinates."""
+    if homography.shape != (3, 3):
+        return None
+
+    x1, y1, x2, y2 = bbox
+    foot_x = (float(x1) + float(x2)) / 2.0
+    foot_y = float(y2)
+    pt = np.array([[[foot_x, foot_y]]], dtype=np.float32)
+    try:
+        projected = cv2.perspectiveTransform(pt, homography)
+    except cv2.error:
+        return None
+
+    fx = float(projected[0, 0, 0])
+    fy = float(projected[0, 0, 1])
+    if not np.isfinite(fx) or not np.isfinite(fy):
+        return None
+    if not (-100.0 < fx < FIELD_REG_TEMPLATE_W + 100.0):
+        return None
+    if not (-50.0 < fy < FIELD_REG_TEMPLATE_H + 50.0):
+        return None
+    return fx, fy
+
+
+def center_roi_green_fraction(
+    frame: np.ndarray, hsv: np.ndarray | None = None
+) -> float:
     """Fraction of green pixels in center ROI (playable-area proxy for HSV deferral)."""
     h, w = frame.shape[:2]
-    roi = frame[int(h * 0.35) : int(h * 0.85), int(w * 0.1) : int(w * 0.9)]
-    mask = build_field_mask(roi)
-    return float((mask > 0).sum()) / max(mask.size, 1)
+    y0, y1 = int(h * FIELD_ROI_Y0_FRAC), int(h * FIELD_ROI_Y1_FRAC)
+    x0, x1 = int(w * FIELD_ROI_X0_FRAC), int(w * FIELD_ROI_X1_FRAC)
+    roi_hsv = (hsv[y0:y1, x0:x1] if hsv is not None
+               else cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV))
+    green = cv2.inRange(
+        roi_hsv,
+        np.array([FIELD_HSV_HUE_LOW,  FIELD_HSV_SAT_LOW,  FIELD_HSV_VAL_LOW]),
+        np.array([FIELD_HSV_HUE_HIGH, 255,                255]),
+    )
+    return float(green.sum()) / (255.0 * max(green.size, 1))

@@ -121,7 +121,7 @@ def torso_mask_from_keypoints(
         return upper_body_mask(crop_mask, bbox=bbox)
 
     # keypoints: (17, 3) x, y, conf
-    idx = [5, 6, 11, 12]
+    idx = [5, 6, 12, 11]
     pts = []
     for i in idx:
         x, y, c = keypoints[i]

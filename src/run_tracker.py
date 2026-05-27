@@ -16,6 +16,7 @@ from src.config import (
     CALIBRATION_VERSION,
     DETECT_EVERY_DEFAULT,
     HELMET_CONF,
+    HELMET_EVERY_DEFAULT,
     HELMET_GATE_GRACE,
     HELMET_MODEL_PATH,
     PIPELINE_THREADS_DEFAULT,
@@ -82,9 +83,10 @@ def run(
     tracker: str = "botsort",
     pose_every: int = POSE_EVERY_DEFAULT,
     no_pose: bool = False,
-    require_helmet: bool = False,
+    require_helmet: bool = True,
     helmet_model_path: Path | None = None,
     helmet_conf: float = HELMET_CONF,
+    helmet_every: int = HELMET_EVERY_DEFAULT,
     use_helmet_gate: bool = True,
     helmet_gate_grace: int = HELMET_GATE_GRACE,
     player_conf: float = PLAYER_PREDICT_CONF,
@@ -127,11 +129,13 @@ def run(
         require_helmet=require_helmet,
         helmet_model_path=helmet_weights,
         helmet_conf=helmet_conf,
+        helmet_every=max(1, int(helmet_every)),
         use_helmet_gate=use_helmet_gate,
         helmet_gate_grace=max(0, helmet_gate_grace),
     )
     team_state_counts: Counter = Counter()
     total_frames = 0
+    run_started = time.perf_counter()
 
     if load_calibration_path and classifier is not None:
         load_calibration(classifier, Path(load_calibration_path))
@@ -148,16 +152,15 @@ def run(
             if not ret:
                 break
             t0 = time.perf_counter()
-            extract_tracked_detections(
-                model,
+            model.predict(
                 bench_frame,
-                frame_idx=0,
-                run_inference=True,
+                classes=[PLAYER_CLASS_ID],
+                conf=ctx.player_conf,
+                iou=ctx.player_iou,
+                imgsz=ctx.player_imgsz,
+                max_det=ctx.player_max_det,
                 retina_masks=True,
-                player_conf=ctx.player_conf,
-                player_iou=ctx.player_iou,
-                player_imgsz=ctx.player_imgsz,
-                player_max_det=ctx.player_max_det,
+                verbose=False,
             )
             warmup_times.append(time.perf_counter() - t0)
         if warmup_times:
@@ -282,6 +285,11 @@ def run(
         zero_det_rate = ctx.det_stats.zero_det_frames / ctx.det_stats.frames
         print(f"Zero-det rate: {zero_det_rate:.1%}")
     print(f"Wrote {frame_idx} frames to {out_path}")
+    elapsed_s = time.perf_counter() - run_started
+    if elapsed_s > 0:
+        print(f"Elapsed seconds: {elapsed_s:.2f}")
+        print(f"Effective FPS: {frame_idx / elapsed_s:.2f}")
+    print(f"Helmet inference frames: {ctx.helmet_inference_frames}")
     if total_frames:
         print(f"Track ID change rate: {ctx.track_id_changes / total_frames:.4f}")
         print(f"Registration valid frames: {100 * ctx.registration_valid_frames / total_frames:.1f}%")
@@ -379,9 +387,9 @@ def main() -> None:
         help="Keep retina_masks even if benchmark is slow",
     )
     parser.add_argument(
-        "--require-helmet",
+        "--no-helmet",
         action="store_true",
-        help="Keep only tracked detections with a matching helmet near the head region",
+        help="Disable helmet verification (allows sideline staff through)",
     )
     parser.add_argument(
         "--helmet-model",
@@ -393,6 +401,12 @@ def main() -> None:
         type=float,
         default=HELMET_CONF,
         help="Helmet detector confidence threshold",
+    )
+    parser.add_argument(
+        "--helmet-every",
+        type=int,
+        default=HELMET_EVERY_DEFAULT,
+        help="Run helmet verification every N detection frames",
     )
     parser.add_argument(
         "--no-helmet-gate",
@@ -429,9 +443,10 @@ def main() -> None:
         tracker=args.tracker,
         pose_every=args.pose_every,
         no_pose=args.no_pose,
-        require_helmet=args.require_helmet,
+        require_helmet=not args.no_helmet,
         helmet_model_path=Path(args.helmet_model) if args.helmet_model else None,
         helmet_conf=args.helmet_conf,
+        helmet_every=args.helmet_every,
         use_helmet_gate=not args.no_helmet_gate,
         helmet_gate_grace=args.helmet_gate_grace,
         player_conf=args.player_conf,

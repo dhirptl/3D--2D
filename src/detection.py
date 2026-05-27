@@ -80,18 +80,27 @@ def extract_tracked_detections(
     iou = PLAYER_PREDICT_IOU if player_iou is None else player_iou
     imgsz = PLAYER_IMGSZ if player_imgsz is None else player_imgsz
     max_det = PLAYER_PREDICT_MAX_DET if player_max_det is None else player_max_det
-    results = model.track(
-        frame,
-        classes=[PLAYER_CLASS_ID],
-        conf=conf,
-        iou=iou,
-        imgsz=imgsz,
-        max_det=max_det,
-        tracker=tracker,
-        persist=True,
-        retina_masks=retina_masks,
-        verbose=False,
-    )
+    try:
+        results = model.track(
+            frame,
+            classes=[PLAYER_CLASS_ID],
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            max_det=max_det,
+            tracker=tracker,
+            persist=True,
+            retina_masks=retina_masks,
+            verbose=False,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if any(kw in msg for kw in ("shape", "size", "mismatch", "broadcast")):
+            logger.warning("frame %d: tracker state error (%s); skipping frame", frame_idx, e)
+            if stats:
+                stats.missing_mask_warnings += 1
+            return []
+        raise
     result = results[0]
 
     if result.boxes is None or result.boxes.id is None:
@@ -102,7 +111,6 @@ def extract_tracked_detections(
     if result.masks is None:
         if stats:
             stats.missing_mask_warnings += 1
-            stats.record(0)
         logger.warning("frame %d: boxes present but masks is None", frame_idx)
         return []
 

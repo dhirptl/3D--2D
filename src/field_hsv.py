@@ -5,11 +5,16 @@ import numpy as np
 
 from src.config import (
     FIELD_HSV_AUTO_FRAMES,
+    FIELD_HSV_CALIB_PX_PER_FRAME,
     FIELD_HSV_HUE_HIGH,
     FIELD_HSV_HUE_LOW,
     FIELD_HSV_MAX_PIXELS,
     FIELD_HSV_SAT_LOW,
     FIELD_HSV_VAL_LOW,
+    FIELD_ROI_X0_FRAC,
+    FIELD_ROI_X1_FRAC,
+    FIELD_ROI_Y0_FRAC,
+    FIELD_ROI_Y1_FRAC,
 )
 from src.post_process import build_field_mask
 
@@ -21,6 +26,24 @@ def _subsample_pixels(pixels: np.ndarray, max_n: int) -> np.ndarray:
     return pixels[idx]
 
 
+def _hsv_bounds_from_pixels(all_px: np.ndarray) -> tuple[int, int, int, int]:
+    hue_low  = int(max(0,   np.percentile(all_px[:, 0],  5) - 5))
+    hue_high = int(min(179, np.percentile(all_px[:, 0], 95) + 5))
+    sat_low  = int(max(20,  np.percentile(all_px[:, 1], 10) - 10))
+    val_low  = int(max(20,  np.percentile(all_px[:, 2], 10) - 10))
+    return hue_low, hue_high, sat_low, val_low
+
+
+def estimate_hsv_from_pixel_arrays(
+    pixel_arrays: list[np.ndarray],
+) -> tuple[int, int, int, int]:
+    """Return (hue_low, hue_high, sat_low, val_low) from pre-sampled HSV pixel arrays."""
+    if not pixel_arrays:
+        return FIELD_HSV_HUE_LOW, FIELD_HSV_HUE_HIGH, FIELD_HSV_SAT_LOW, FIELD_HSV_VAL_LOW
+    all_px = np.concatenate(pixel_arrays, axis=0)
+    return _hsv_bounds_from_pixels(all_px)
+
+
 def estimate_field_hsv(frames: list[np.ndarray]) -> tuple[int, int, int, int]:
     """Return (hue_low, hue_high, sat_low, val_low) from sample frames."""
     chunks: list[np.ndarray] = []
@@ -28,7 +51,10 @@ def estimate_field_hsv(frames: list[np.ndarray]) -> tuple[int, int, int, int]:
 
     for frame in frames[:FIELD_HSV_AUTO_FRAMES]:
         h, w = frame.shape[:2]
-        roi = frame[int(h * 0.35) : int(h * 0.85), int(w * 0.1) : int(w * 0.9)]
+        roi = frame[
+            int(h * FIELD_ROI_Y0_FRAC) : int(h * FIELD_ROI_Y1_FRAC),
+            int(w * FIELD_ROI_X0_FRAC) : int(w * FIELD_ROI_X1_FRAC),
+        ]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(
             hsv,
@@ -42,13 +68,7 @@ def estimate_field_hsv(frames: list[np.ndarray]) -> tuple[int, int, int, int]:
 
     if not chunks:
         return FIELD_HSV_HUE_LOW, FIELD_HSV_HUE_HIGH, FIELD_HSV_SAT_LOW, FIELD_HSV_VAL_LOW
-
-    all_px = np.concatenate(chunks, axis=0)
-    hue_low = int(max(0, np.percentile(all_px[:, 0], 5) - 5))
-    hue_high = int(min(179, np.percentile(all_px[:, 0], 95) + 5))
-    sat_low = int(max(20, np.percentile(all_px[:, 1], 10) - 10))
-    val_low = int(max(20, np.percentile(all_px[:, 2], 10) - 10))
-    return hue_low, hue_high, sat_low, val_low
+    return _hsv_bounds_from_pixels(np.concatenate(chunks, axis=0))
 
 
 def build_field_mask_from_bounds(
@@ -57,7 +77,9 @@ def build_field_mask_from_bounds(
     hue_high: int,
     sat_low: int,
     val_low: int,
+    *,
+    hsv: np.ndarray | None = None,
 ) -> np.ndarray:
     return build_field_mask(
-        frame, hue_low=hue_low, hue_high=hue_high, sat_low=sat_low, val_low=val_low
+        frame, hsv=hsv, hue_low=hue_low, hue_high=hue_high, sat_low=sat_low, val_low=val_low
     )

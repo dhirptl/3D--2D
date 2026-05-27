@@ -20,6 +20,7 @@ _MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (51, 51))
 def build_field_mask(
     frame: np.ndarray,
     *,
+    hsv: np.ndarray | None = None,
     hue_low: int | None = None,
     hue_high: int | None = None,
     sat_low: int | None = None,
@@ -29,7 +30,8 @@ def build_field_mask(
     hh = FIELD_HSV_HUE_HIGH if hue_high is None else hue_high
     sl = FIELD_HSV_SAT_LOW if sat_low is None else sat_low
     vl = FIELD_HSV_VAL_LOW if val_low is None else val_low
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    if hsv is None:
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     lower = np.array([hl, sl, vl])
     upper = np.array([hh, 255, 255])
     green = cv2.inRange(hsv, lower, upper)

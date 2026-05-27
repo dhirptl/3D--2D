@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import cv2
 import numpy as np
 from ultralytics import YOLO
 
@@ -10,10 +11,18 @@ from src.config import (
     CAMERA_CUT_MAD_THRESHOLD,
     FIELD_HSV_AUTO_FRAMES,
     FIELD_HSV_BLEND_ALPHA,
+    FIELD_HSV_CALIB_PX_PER_FRAME,
     FIELD_HSV_UPDATE_INTERVAL,
     FIELD_MASK_INTERVAL,
+    FIELD_REG_STABLE_STREAK,
+    FIELD_REG_UPDATE_STRIDE_STABLE,
     FIELD_REG_VALID_STREAK,
+    FIELD_ROI_X0_FRAC,
+    FIELD_ROI_X1_FRAC,
+    FIELD_ROI_Y0_FRAC,
+    FIELD_ROI_Y1_FRAC,
     HELMET_CONF,
+    HELMET_EVERY_DEFAULT,
     HELMET_GATE_GRACE,
     HELMET_HEAD_IOU,
     HELMET_MODEL_PATH,
@@ -25,9 +34,9 @@ from src.config import (
     POST_CUT_FRAMES,
 )
 from src.detection import DetectionStats, extract_tracked_detections
-from src.field_hsv import build_field_mask_from_bounds, estimate_field_hsv
+from src.field_hsv import build_field_mask_from_bounds, estimate_field_hsv, estimate_hsv_from_pixel_arrays
 from src.field_registration import FieldRegistration, center_roi_green_fraction
-from src.helmet_verify import HelmetTrackGate, detect_helmets, filter_detections_by_helmet
+from src.helmet_verify import HelmetTrackGate, detect_helmets_roi, filter_detections_by_helmet
 from src.pose_estimation import attach_keypoints_to_detections, get_pose_model, run_pose_on_frame
 from src.post_process import build_field_mask, filter_by_field_area
 from src.team_classifier import FootballTeamClassifier
@@ -49,9 +58,10 @@ class VideoPipelineContext:
     player_max_det: int = PLAYER_PREDICT_MAX_DET
     pose_every: int = POSE_EVERY_DEFAULT
     use_pose: bool = True
-    require_helmet: bool = False
+    require_helmet: bool = True
     helmet_model_path: Path | None = None
     helmet_conf: float = HELMET_CONF
+    helmet_every: int = HELMET_EVERY_DEFAULT
     use_helmet_gate: bool = True
     helmet_gate_grace: int = HELMET_GATE_GRACE
     field_hsv_bounds: tuple[int, int, int, int] | None = None
@@ -72,8 +82,10 @@ class VideoPipelineContext:
     _last_helmets: list = field(default_factory=list)
     _helmet_cache_frame: int = -1
     _helmet_gate: HelmetTrackGate | None = None
+    helmet_inference_frames: int = 0
     track_id_changes: int = 0
     prev_track_ids: set[int] = field(default_factory=set)
+    camera_cut_cooldown: int = 0
 
 
 def _blend_hsv_bounds(
@@ -82,17 +94,26 @@ def _blend_hsv_bounds(
     return tuple(int((1 - alpha) * o + alpha * n) for o, n in zip(old, new))
 
 
-def _update_field_hsv_rolling(frame: np.ndarray, ctx: VideoPipelineContext) -> None:
+def _update_field_hsv_rolling(
+    frame: np.ndarray, ctx: VideoPipelineContext, hsv: np.ndarray
+) -> None:
     if ctx.field_hsv_bounds is None:
         return
     ctx.field_update_counter += 1
     if ctx.field_update_counter % FIELD_HSV_UPDATE_INTERVAL != 0:
         return
     h, w = frame.shape[:2]
-    center_strip = frame[h // 3 : 2 * h // 3, w // 3 : 2 * w // 3]
-    new_hsv = estimate_field_hsv([center_strip])
+    roi_hsv = hsv[
+        int(h * FIELD_ROI_Y0_FRAC) : int(h * FIELD_ROI_Y1_FRAC),
+        int(w * FIELD_ROI_X0_FRAC) : int(w * FIELD_ROI_X1_FRAC),
+    ]
+    pixels = roi_hsv.reshape(-1, 3)
+    if len(pixels) > FIELD_HSV_CALIB_PX_PER_FRAME:
+        idx = np.random.choice(len(pixels), FIELD_HSV_CALIB_PX_PER_FRAME, replace=False)
+        pixels = pixels[idx]
+    new_hsv_bounds = estimate_hsv_from_pixel_arrays([pixels])
     ctx.field_hsv_bounds = _blend_hsv_bounds(
-        ctx.field_hsv_bounds, new_hsv, FIELD_HSV_BLEND_ALPHA
+        ctx.field_hsv_bounds, new_hsv_bounds, FIELD_HSV_BLEND_ALPHA
     )
     if ctx.classifier is not None:
         ctx.classifier.field_hsv = ctx.field_hsv_bounds
@@ -100,28 +121,49 @@ def _update_field_hsv_rolling(frame: np.ndarray, ctx: VideoPipelineContext) -> N
     ctx.field_hsv_updated_this_frame = True
 
 
-def _maybe_init_field_hsv(frame: np.ndarray, ctx: VideoPipelineContext) -> None:
+def _maybe_init_field_hsv(
+    frame: np.ndarray, ctx: VideoPipelineContext, hsv: np.ndarray
+) -> None:
     """Defer HSV auto-calibration until homography valid or enough green in center ROI."""
     if ctx.field_hsv_bounds is not None or ctx.classifier is None:
         return
 
     reg_ok = ctx.field_reg.registration_valid
-    green_frac = center_roi_green_fraction(frame)
+    green_frac = center_roi_green_fraction(frame, hsv)
     if reg_ok or green_frac > 0.15:
-        ctx.auto_frames.append(frame)
+        # Extract and subsample ROI pixels now; don't store the full frame
+        h, w = frame.shape[:2]
+        roi_hsv = hsv[
+            int(h * FIELD_ROI_Y0_FRAC) : int(h * FIELD_ROI_Y1_FRAC),
+            int(w * FIELD_ROI_X0_FRAC) : int(w * FIELD_ROI_X1_FRAC),
+        ]
+        pixels = roi_hsv.reshape(-1, 3)
+        if len(pixels) > FIELD_HSV_CALIB_PX_PER_FRAME:
+            idx = np.random.choice(len(pixels), FIELD_HSV_CALIB_PX_PER_FRAME, replace=False)
+            pixels = pixels[idx]
+        ctx.auto_frames.append(pixels)
     if len(ctx.auto_frames) >= FIELD_HSV_AUTO_FRAMES:
-        ctx.field_hsv_bounds = estimate_field_hsv(ctx.auto_frames)
+        ctx.field_hsv_bounds = estimate_hsv_from_pixel_arrays(ctx.auto_frames)
         ctx.classifier.field_hsv = ctx.field_hsv_bounds
         ctx.classifier.field_hsv_ready = True
         ctx.auto_frames.clear()
         ctx.hsv_deferred = False
 
 
-def _update_field_mask(frame: np.ndarray, ctx: VideoPipelineContext) -> np.ndarray | None:
+def _update_field_mask(
+    frame: np.ndarray, ctx: VideoPipelineContext, hsv: np.ndarray | None = None
+) -> np.ndarray | None:
+    if hsv is None:
+        import cv2 as _cv2
+        hsv = _cv2.cvtColor(frame, _cv2.COLOR_BGR2HSV)
     if ctx.classifier is None and not ctx.filter_field:
         return None
 
-    ctx.field_reg.update(frame)
+    # Skip Hough+RANSAC on stable frames; stride widens once locked
+    streak = ctx.field_reg.valid_streak
+    stride = FIELD_REG_UPDATE_STRIDE_STABLE if streak >= FIELD_REG_STABLE_STREAK else 1
+    if ctx.frame_idx % stride == 0:
+        ctx.field_reg.update(frame, hsv=hsv)
     if ctx.field_reg.registration_valid:
         ctx.registration_valid_frames += 1
         play = ctx.field_reg.playable_mask(frame.shape[0], frame.shape[1])
@@ -130,7 +172,11 @@ def _update_field_mask(frame: np.ndarray, ctx: VideoPipelineContext) -> np.ndarr
             ctx.field_mask_frame = ctx.frame_idx
             if ctx.classifier is not None:
                 ctx.classifier.field_mask = play
+                ctx.classifier.homography = ctx.field_reg.homography
             return play
+
+    if ctx.classifier is not None:
+        ctx.classifier.homography = None
 
     should_recompute = (
         ctx.cached_field_mask is None
@@ -140,9 +186,9 @@ def _update_field_mask(frame: np.ndarray, ctx: VideoPipelineContext) -> np.ndarr
 
     if should_recompute:
         if ctx.field_hsv_bounds is not None:
-            mask = build_field_mask_from_bounds(frame, *ctx.field_hsv_bounds)
+            mask = build_field_mask_from_bounds(frame, *ctx.field_hsv_bounds, hsv=hsv)
         elif ctx.classifier is not None or ctx.filter_field:
-            mask = build_field_mask(frame)
+            mask = build_field_mask(frame, hsv=hsv)
         else:
             return None
         ctx.cached_field_mask = mask
@@ -189,15 +235,28 @@ def _helmet_detections(
     ctx: VideoPipelineContext,
     *,
     run_yolo: bool,
+    detections: list[dict],
 ) -> list[dict]:
     if not ctx.require_helmet:
         return []
-    if not run_yolo:
-        return ctx._last_helmets
 
-    helmets = detect_helmets(_helmet_model(ctx), frame, conf=ctx.helmet_conf)
+    run_helmet = run_yolo and ctx.frame_idx % max(1, ctx.helmet_every) == 0
+    if not run_helmet:
+        return ctx._last_helmets
+    if not detections:
+        ctx._last_helmets = []
+        ctx._helmet_cache_frame = ctx.frame_idx
+        return []
+
+    helmets = detect_helmets_roi(
+        _helmet_model(ctx),
+        frame,
+        detections,
+        conf=ctx.helmet_conf,
+    )
     ctx._last_helmets = helmets
     ctx._helmet_cache_frame = ctx.frame_idx
+    ctx.helmet_inference_frames += 1
     return helmets
 
 
@@ -218,15 +277,34 @@ def _cached_team_labels(ctx: VideoPipelineContext, detections: list[dict]) -> di
     return labels
 
 
+def _reset_tracker(model: YOLO) -> None:
+    """Clear BoT-SORT / ByteTrack internal state after a camera cut."""
+    try:
+        predictor = getattr(model, 'predictor', None)
+        if predictor is None:
+            return
+        for tracker in getattr(predictor, 'trackers', []):
+            if hasattr(tracker, 'reset'):
+                tracker.reset()
+            else:
+                for attr in ('tracked_stracks', 'lost_stracks', 'removed_stracks'):
+                    if hasattr(tracker, attr):
+                        getattr(tracker, attr).clear()
+    except Exception:
+        pass  # never crash the pipeline during cleanup
+
+
 def process_video_frame(
     frame: np.ndarray, ctx: VideoPipelineContext
 ) -> tuple[list[dict], dict[int, int] | None]:
     """Run detection (+ optional team labels) for one frame. Mutates ctx."""
     ctx.field_hsv_updated_this_frame = False
 
-    _maybe_init_field_hsv(frame, ctx)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    _maybe_init_field_hsv(frame, ctx, hsv)
     if ctx.field_hsv_bounds is not None:
-        _update_field_hsv_rolling(frame, ctx)
+        _update_field_hsv_rolling(frame, ctx, hsv)
 
     if ctx.prev_frame is not None and ctx.classifier is not None:
         mad = float(
@@ -234,11 +312,17 @@ def process_video_frame(
                 np.abs(frame.astype(np.float32) - ctx.prev_frame.astype(np.float32))
             )
         )
-        if mad > CAMERA_CUT_MAD_THRESHOLD:
+        if ctx.camera_cut_cooldown > 0:
+            ctx.camera_cut_cooldown -= 1
+        elif mad > CAMERA_CUT_MAD_THRESHOLD:
             print(f"[tracker] camera cut detected at frame {ctx.frame_idx}")
             ctx.classifier.post_cut_frames = POST_CUT_FRAMES
+            ctx.field_reg.reset()
+            ctx.auto_frames.clear()
+            _reset_tracker(ctx.model)
+            ctx.camera_cut_cooldown = POST_CUT_FRAMES
 
-    field_mask = _update_field_mask(frame, ctx)
+    field_mask = _update_field_mask(frame, ctx, hsv)
 
     run_yolo = ctx.detect_every <= 1 or ctx.frame_idx % ctx.detect_every == 0
     if run_yolo:
@@ -275,7 +359,8 @@ def process_video_frame(
         keep = {int(t) for t in tids} if len(tids) else set()
         detections = [d for d in detections if d["track_id"] in keep]
 
-    helmets = _helmet_detections(frame, ctx, run_yolo=run_yolo)
+    helmets = _helmet_detections(frame, ctx, run_yolo=run_yolo, detections=detections)
+    update_helmet_gate = ctx._helmet_cache_frame == ctx.frame_idx
     if ctx.require_helmet and detections:
         detections = filter_detections_by_helmet(
             detections,
@@ -283,7 +368,7 @@ def process_video_frame(
             gate=_helmet_gate(ctx),
             conf_min=ctx.helmet_conf,
             iou_min=HELMET_HEAD_IOU,
-            update_gate=run_yolo,
+            update_gate=update_helmet_gate,
         )
     elif ctx.require_helmet and ctx._helmet_gate is not None:
         ctx._helmet_gate.prune(set())
