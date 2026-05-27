@@ -41,6 +41,10 @@ def subtract_turf_from_mask(
         return crop_mask, False
 
     out = cv2.bitwise_and(crop_mask, cv2.bitwise_not(turf_mask_crop))
+    # Guard: if the field mask (inflated by 51x51 morph close) wipes out >75% of the
+    # player seg mask, skip subtraction — the close filled in the player body as "turf".
+    if mask_area(out) < mask_area(crop_mask) * 0.25:
+        return crop_mask, False
     return out, True
 
 

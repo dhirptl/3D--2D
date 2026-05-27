@@ -434,16 +434,16 @@ def test_adaptive_hud_filter_uses_field_mask():
 
 
 def test_helmet_every_reuses_cached_detections():
-    old_detect = pipeline_module.detect_helmets_roi
+    old_detect = pipeline_module.detect_helmets
     calls = []
 
-    def fake_detect(model, frame, detections, conf=0.0, pad_frac=0.5):
-        del model, frame, conf, pad_frac
-        calls.append(len(detections))
+    def fake_detect(model, frame, conf=0.0):
+        del model, frame, conf
+        calls.append(1)
         return [{"bbox": (1, 1, 2, 2), "conf": 0.8}]
 
     try:
-        pipeline_module.detect_helmets_roi = fake_detect
+        pipeline_module.detect_helmets = fake_detect
         ctx = VideoPipelineContext(model=None, require_helmet=True, helmet_every=2)
         ctx._helmet_model = object()
         frame = np.zeros((20, 20, 3), dtype=np.uint8)
@@ -458,7 +458,7 @@ def test_helmet_every_reuses_cached_detections():
         assert helmets0 == helmets1
         assert ctx.helmet_inference_frames == 1
     finally:
-        pipeline_module.detect_helmets_roi = old_detect
+        pipeline_module.detect_helmets = old_detect
 
 
 def test_warmup_per_track_cap():

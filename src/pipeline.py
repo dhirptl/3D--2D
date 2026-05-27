@@ -36,7 +36,7 @@ from src.config import (
 from src.detection import DetectionStats, extract_tracked_detections
 from src.field_hsv import build_field_mask_from_bounds, estimate_field_hsv, estimate_hsv_from_pixel_arrays
 from src.field_registration import FieldRegistration, center_roi_green_fraction
-from src.helmet_verify import HelmetTrackGate, detect_helmets_roi, filter_detections_by_helmet
+from src.helmet_verify import HelmetTrackGate, detect_helmets, detect_helmets_roi, filter_detections_by_helmet
 from src.pose_estimation import attach_keypoints_to_detections, get_pose_model, run_pose_on_frame
 from src.post_process import build_field_mask, filter_by_field_area
 from src.team_classifier import FootballTeamClassifier
@@ -248,10 +248,9 @@ def _helmet_detections(
         ctx._helmet_cache_frame = ctx.frame_idx
         return []
 
-    helmets = detect_helmets_roi(
+    helmets = detect_helmets(
         _helmet_model(ctx),
         frame,
-        detections,
         conf=ctx.helmet_conf,
     )
     ctx._last_helmets = helmets
