@@ -223,8 +223,8 @@ class FieldRegistration:
 
     def _invalidate_streak(self) -> None:
         self.valid_streak = max(0, self.valid_streak - 1)
-        self.homography_stale = True
-        if self.valid_streak == 0:
+        if self.valid_streak < FIELD_REG_VALID_STREAK:
+            self.homography_stale = True
             self.registration_valid = False
 
     def playable_mask(self, h: int, w: int) -> np.ndarray | None:
