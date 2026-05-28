@@ -22,10 +22,7 @@ python -m src.run_tracker --source ...
 ## Full pipeline
 
 ```bash
-# 1. Bbox dataset
-python -m src.prepare_dataset
-
-# 2. Merge bbox sources and mine optional hard negatives
+# 1. Merge bbox sources into merged_football_dataset_v2
 python -m src.prepare_merged_dataset_v2
 # Optional:
 # python -m src.mine_hard_negatives --source outputs/arz_nyj_1min.mov --split train
@@ -54,7 +51,13 @@ python -m src.run_tracker \
 
 # 7. Metrics
 python -m src.eval_clip --source outputs/arz_nyj_1min.mov
+python -m src.sweep_predict --source outputs/arz_nyj_1min.mov --max-frames 300
 ```
+
+Dataset YAMLs (do not use root `data.yaml` for training):
+- Segmentation: `merged_football_dataset_v2_seg/data.yaml` via `SEG_DATASET_YAML` in `src/config.py`
+- Helmet: `football_dataset_helmet/data.yaml` via `HELMET_DATASET_YAML`
+- Legacy bbox detector weights only: `football_tracker/run_v1/weights/best.pt` (`MODEL_PATH`)
 
 ## North-star release rubric
 

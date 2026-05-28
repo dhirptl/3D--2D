@@ -74,7 +74,44 @@ def filter_hud_detections(frame_shape, xyxy, confs, track_ids, *, field_mask: np
     return xyxy[idx], confs[idx], tids
 
 
-def filter_by_field_area(frame: np.ndarray, xyxy, confs, track_ids, mask: np.ndarray):
+def suppress_duplicate_tracks(
+    detections: list[dict], iou_thresh: float = 0.50
+) -> list[dict]:
+    """Remove lower-confidence tracks that heavily overlap a higher-confidence track."""
+    if len(detections) <= 1:
+        return detections
+    sorted_dets = sorted(detections, key=lambda d: d["conf"], reverse=True)
+    suppressed: set[int] = set()
+    for i, det_i in enumerate(sorted_dets):
+        if det_i["track_id"] in suppressed:
+            continue
+        x1i, y1i, x2i, y2i = det_i["bbox"]
+        ai = max(0, x2i - x1i) * max(0, y2i - y1i)
+        for det_j in sorted_dets[i + 1:]:
+            if det_j["track_id"] in suppressed:
+                continue
+            x1j, y1j, x2j, y2j = det_j["bbox"]
+            ix1, iy1 = max(x1i, x1j), max(y1i, y1j)
+            ix2, iy2 = min(x2i, x2j), min(y2i, y2j)
+            if ix2 <= ix1 or iy2 <= iy1:
+                continue
+            inter = (ix2 - ix1) * (iy2 - iy1)
+            aj = max(0, x2j - x1j) * max(0, y2j - y1j)
+            union = ai + aj - inter
+            if union > 0 and inter / union > iou_thresh:
+                suppressed.add(det_j["track_id"])
+    return [d for d in sorted_dets if d["track_id"] not in suppressed]
+
+
+def filter_by_field_area(
+    frame: np.ndarray,
+    xyxy,
+    confs,
+    track_ids,
+    mask: np.ndarray,
+    *,
+    min_field_frac: float = 0.10,
+):
     if len(xyxy) == 0:
         empty = np.array([], dtype=int)
         return np.empty((0, 4)), np.array([]), empty
@@ -89,7 +126,7 @@ def filter_by_field_area(frame: np.ndarray, xyxy, confs, track_ids, mask: np.nda
             max(0, bottom_y1) : min(fh, y2),
             max(0, x1) : min(fw, x2),
         ]
-        if foot_region.size > 0 and (np.count_nonzero(foot_region) / foot_region.size) > 0.10:
+        if foot_region.size > 0 and (np.count_nonzero(foot_region) / foot_region.size) > min_field_frac:
             keep.append(i)
     if not keep:
         empty = np.array([], dtype=int)

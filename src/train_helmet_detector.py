@@ -4,6 +4,7 @@ import argparse
 
 from ultralytics import YOLO
 
+from src.dataset_yaml import validate_dataset_yaml
 from src.train_common import ROOT, base_train_kwargs
 
 HELMET_DATASET_YAML = ROOT / "football_dataset_helmet" / "data.yaml"
@@ -18,10 +19,7 @@ def train(
     epochs: int = 50,
     freeze: int = 10,
 ) -> None:
-    if not HELMET_DATASET_YAML.exists():
-        raise FileNotFoundError(
-            f"{HELMET_DATASET_YAML} not found. Run: python -m src.prepare_helmet_dataset"
-        )
+    validate_dataset_yaml(HELMET_DATASET_YAML, task="helmet")
 
     model = YOLO("yolo11n.pt")
     kwargs = base_train_kwargs(

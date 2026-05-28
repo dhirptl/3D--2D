@@ -1,3 +1,5 @@
+# Legacy Roboflow 2-class export (ball + player). Do NOT use for seg/helmet training.
+# Seg training uses SEG_DATASET_YAML (merged_football_dataset_v2_seg/data.yaml).
 train: ../train/images
 val: ../valid/images
 test: ../test/images

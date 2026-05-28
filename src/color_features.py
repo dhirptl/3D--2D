@@ -1,4 +1,4 @@
-"""LAB chrominance features from segmentation masks (isolate, turf subtract, torso, L CLAHE)."""
+"""6D color features (LAB AB + HSV hue) from segmentation masks (isolate, turf subtract, torso, L CLAHE)."""
 
 import cv2
 import numpy as np
@@ -92,7 +92,7 @@ def upper_body_mask(
             crop_start = int(span * 0.2)
             crop_end = int(span * 0.8)
         elif aspect < 0.5:
-            crop_start = 0
+            crop_start = int(span * 0.15)  # skip helmet/head for upright players
             crop_end = int(span * top_frac)
         else:
             t = min(1.0, max(0.0, (aspect - 0.5) / 0.8))
@@ -151,13 +151,28 @@ def preprocess_lab_clahe(player_bgr: np.ndarray) -> np.ndarray:
 
 
 def extract_lab_ab_stats(lab_image: np.ndarray, band_mask: np.ndarray) -> np.ndarray | None:
-    """4D feature: mean_A, mean_B, std_A, std_B."""
+    """4D feature: mean_A, mean_B, std_A, std_B. (kept for backward compat)"""
     pixels = lab_image[band_mask > 0]
     if len(pixels) < MIN_COLOR_PIXELS:
         return None
     a = pixels[:, 1].astype(np.float32)
     b = pixels[:, 2].astype(np.float32)
     return np.array([a.mean(), b.mean(), a.std(), b.std()], dtype=np.float64)
+
+
+def extract_lab_ab_hue_stats(
+    lab_image: np.ndarray, hsv_image: np.ndarray, band_mask: np.ndarray
+) -> np.ndarray | None:
+    """6D feature: mean_A, mean_B, std_A, std_B, mean_H, std_H."""
+    pixels_lab = lab_image[band_mask > 0]
+    if len(pixels_lab) < MIN_COLOR_PIXELS:
+        return None
+    a = pixels_lab[:, 1].astype(np.float32)
+    b = pixels_lab[:, 2].astype(np.float32)
+    h = hsv_image[band_mask > 0][:, 0].astype(np.float32)
+    return np.array(
+        [a.mean(), b.mean(), a.std(), b.std(), h.mean(), h.std()], dtype=np.float64
+    )
 
 
 def build_raw_lab4d_vector(
@@ -214,13 +229,14 @@ def build_raw_lab4d_vector(
         return None
 
     lab_crop = preprocess_lab_clahe(player_bgr)
-    vec = extract_lab_ab_stats(lab_crop, torso)
+    hsv_crop = cv2.cvtColor(player_bgr, cv2.COLOR_BGR2HSV)
+    vec = extract_lab_ab_hue_stats(lab_crop, hsv_crop, torso)
     if vec is not None and det is not None:
         det["_turf_sub_skipped"] = turf_skipped
     return vec
 
 
-# Backward-compatible alias
+# Alias: build_raw_lab4d_vector now returns 6D (LAB AB + HSV hue)
 build_raw_6d_vector = build_raw_lab4d_vector
 
 # Legacy HSV path for tests that still reference it

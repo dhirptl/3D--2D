@@ -22,6 +22,14 @@ def crop_mask_to_bbox(full_mask: np.ndarray, bbox: tuple[int, int, int, int]) ->
     return full_mask[y1:y2, x1:x2].copy()
 
 
+def bbox_fill_mask(bbox: tuple[int, int, int, int]) -> np.ndarray:
+    """Rectangular uint8 mask (255 inside bbox) when seg masks are unavailable."""
+    x1, y1, x2, y2 = map(int, bbox)
+    h = max(1, y2 - y1)
+    w = max(1, x2 - x1)
+    return np.full((h, w), 255, dtype=np.uint8)
+
+
 def iou_matrix_xyxy(boxes_a: np.ndarray, boxes_b: np.ndarray) -> np.ndarray:
     """Pairwise IoU matrix (len_a, len_b)."""
     if len(boxes_a) == 0 or len(boxes_b) == 0:

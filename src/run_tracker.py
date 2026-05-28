@@ -20,8 +20,10 @@ from src.config import (
     HELMET_GATE_GRACE,
     HELMET_MODEL_PATH,
     PIPELINE_THREADS_DEFAULT,
+    PLAYER_CLASS_ID,
     PLAYER_IMGSZ,
     PLAYER_PREDICT_CONF,
+    PLAYER_PREDICT_HALF,
     PLAYER_PREDICT_IOU,
     PLAYER_PREDICT_MAX_DET,
     POSE_EVERY_DEFAULT,
@@ -70,6 +72,7 @@ def run(
     apply_hud_filter: bool = True,
     show_masks: bool = False,
     debug_teams: bool = False,
+    debug_filters: bool = False,
     save_calibration: str | None = None,
     load_calibration_path: str | None = None,
     dump_detections: str | None = None,
@@ -93,6 +96,7 @@ def run(
     player_iou: float = PLAYER_PREDICT_IOU,
     player_imgsz: int = PLAYER_IMGSZ,
     player_max_det: int = PLAYER_PREDICT_MAX_DET,
+    player_half: bool = PLAYER_PREDICT_HALF,
 ) -> None:
     weights = model_path or SEG_MODEL_PATH
     if not weights.exists():
@@ -124,6 +128,7 @@ def run(
         player_iou=player_iou,
         player_imgsz=max(64, int(player_imgsz)),
         player_max_det=max(1, int(player_max_det)),
+        player_half=player_half,
         pose_every=max(1, pose_every),
         use_pose=not no_pose,
         require_helmet=require_helmet,
@@ -132,6 +137,7 @@ def run(
         helmet_every=max(1, int(helmet_every)),
         use_helmet_gate=use_helmet_gate,
         helmet_gate_grace=max(0, helmet_gate_grace),
+        debug_filters=debug_filters,
     )
     team_state_counts: Counter = Counter()
     total_frames = 0
@@ -317,6 +323,11 @@ def main() -> None:
     parser.add_argument("--no-hud-filter", action="store_true")
     parser.add_argument("--show-masks", action="store_true")
     parser.add_argument("--debug-teams", action="store_true", help="Show dist0/dist1 and reject reasons")
+    parser.add_argument(
+        "--debug-filters",
+        action="store_true",
+        help="Log helmet/field rejection counts every 300 frames",
+    )
     parser.add_argument("--retina-masks", action="store_true", help="Higher-res seg masks (slower)")
     parser.add_argument("--save-calibration", default=None)
     parser.add_argument("--load-calibration", default=None)
@@ -369,6 +380,12 @@ def main() -> None:
         type=int,
         default=PLAYER_PREDICT_MAX_DET,
         help="Player detector max detections per frame",
+    )
+    parser.add_argument(
+        "--half",
+        action="store_true",
+        default=PLAYER_PREDICT_HALF,
+        help="Use FP16 half-precision inference (large speedup on CUDA; variable on MPS)",
     )
     parser.add_argument(
         "--pose-every",
@@ -430,6 +447,7 @@ def main() -> None:
         apply_hud_filter=not args.no_hud_filter,
         show_masks=args.show_masks,
         debug_teams=args.debug_teams,
+        debug_filters=args.debug_filters,
         save_calibration=args.save_calibration,
         load_calibration_path=args.load_calibration,
         dump_detections=args.dump_detections,
@@ -453,6 +471,7 @@ def main() -> None:
         player_iou=args.player_iou,
         player_imgsz=args.player_imgsz,
         player_max_det=args.player_max_det,
+        player_half=args.half,
     )
 
 

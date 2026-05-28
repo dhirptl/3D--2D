@@ -793,6 +793,7 @@ class FootballTeamClassifier:
                     "using unfiltered set"
                 )
                 vecs = np.stack(self.warmup_vectors[-WARMUP_VECTOR_CAP:])
+                scores = np.array(self.warmup_scores[-WARMUP_VECTOR_CAP:])
 
             self.cal_log.on_calibrate_start(len(vecs))
 
@@ -811,12 +812,14 @@ class FootballTeamClassifier:
                 )
 
             normed = normalize_batch_features(vecs, self.scaler)
+            # Normalize weights to sum to 1 for numerical stability
+            sample_weight = scores / scores.sum() if scores.sum() > 0 else None
             km = KMeans(
                 n_clusters=2,
                 random_state=KMEANS_RANDOM_STATE,
                 n_init=KMEANS_N_INIT,
             )
-            km.fit(normed)
+            km.fit(normed, sample_weight=sample_weight)
             c0 = km.cluster_centers_[0]
             c1 = km.cluster_centers_[1]
             dist = float(np.linalg.norm(c0 - c1))

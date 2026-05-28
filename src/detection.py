@@ -11,11 +11,13 @@ from src.config import (
     PLAYER_CLASS_ID,
     PLAYER_IMGSZ,
     PLAYER_PREDICT_CONF,
+    PLAYER_PREDICT_HALF,
     PLAYER_PREDICT_IOU,
     PLAYER_PREDICT_MAX_DET,
     TRACKER_CFG,
 )
 from src.mask_utils import (
+    bbox_fill_mask,
     crop_mask_to_bbox,
     get_instance_mask_full,
     mask_area,
@@ -69,6 +71,7 @@ def extract_tracked_detections(
     player_iou: float | None = None,
     player_imgsz: int | None = None,
     player_max_det: int | None = None,
+    player_half: bool | None = None,
     field_mask: np.ndarray | None = None,
 ) -> list[dict]:
     if not run_inference:
@@ -80,6 +83,7 @@ def extract_tracked_detections(
     iou = PLAYER_PREDICT_IOU if player_iou is None else player_iou
     imgsz = PLAYER_IMGSZ if player_imgsz is None else player_imgsz
     max_det = PLAYER_PREDICT_MAX_DET if player_max_det is None else player_max_det
+    half = PLAYER_PREDICT_HALF if player_half is None else player_half
     try:
         results = model.track(
             frame,
@@ -91,6 +95,7 @@ def extract_tracked_detections(
             tracker=tracker,
             persist=True,
             retina_masks=retina_masks,
+            half=half,
             verbose=False,
         )
     except Exception as e:
@@ -108,17 +113,17 @@ def extract_tracked_detections(
             stats.record(0)
         return []
 
-    if result.masks is None:
-        if stats:
-            stats.missing_mask_warnings += 1
-        logger.warning("frame %d: boxes present but masks is None", frame_idx)
-        return []
-
     h, w = frame.shape[:2]
     orig_xyxy = result.boxes.xyxy.cpu().numpy()
     confs = result.boxes.conf.cpu().numpy()
     track_ids = result.boxes.id.cpu().numpy().astype(int)
     result_masks = result.masks
+    masks_missing = result_masks is None
+
+    if masks_missing:
+        if stats:
+            stats.missing_mask_warnings += 1
+        logger.warning("frame %d: boxes present but masks is None; using bbox fallback", frame_idx)
 
     xyxy = orig_xyxy
     if apply_hud_filter:
@@ -130,17 +135,21 @@ def extract_tracked_detections(
                 stats.record(0)
             return []
 
-    keep_idx = match_indices(xyxy, orig_xyxy)
+    keep_idx = match_indices(xyxy, orig_xyxy) if not masks_missing else list(range(len(xyxy)))
 
     detections = []
     for i, k in enumerate(keep_idx):
-        full_mask = get_instance_mask_full(result_masks, k, (h, w))
-        if full_mask is None:
-            if stats:
-                stats.missing_mask_warnings += 1
-            continue
         box = tuple(map(int, xyxy[i]))
-        crop_mask = crop_mask_to_bbox(full_mask, box)
+        if masks_missing:
+            crop_mask = bbox_fill_mask(box)
+        else:
+            full_mask = get_instance_mask_full(result_masks, k, (h, w))
+            if full_mask is None:
+                if stats:
+                    stats.missing_mask_warnings += 1
+                crop_mask = bbox_fill_mask(box)
+            else:
+                crop_mask = crop_mask_to_bbox(full_mask, box)
         if mask_area(crop_mask) == 0:
             if stats:
                 stats.missing_mask_warnings += 1
@@ -150,6 +159,7 @@ def extract_tracked_detections(
             "bbox": box,
             "conf": float(confs[i]),
             "mask": crop_mask,
+            "mask_fallback": masks_missing,
         })
 
     if stats:

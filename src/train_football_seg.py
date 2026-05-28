@@ -14,13 +14,16 @@ from src.config import (
     SEG_TRAIN_ERASING,
     SEG_TRAIN_MODEL,
 )
+from src.dataset_yaml import validate_dataset_yaml
 from src.train_common import DEFAULT_IMGSZ, ROOT, base_train_kwargs
+
+CANONICAL_SEG_RUN = "run_v2"
 
 
 def train(
     batch: int = 8,
     device: str = "mps",
-    name: str = "run_v3_stage1",
+    name: str = CANONICAL_SEG_RUN,
     epochs: int = 100,
     freeze: int = 10,
     data: str | None = None,
@@ -33,10 +36,7 @@ def train(
     close_mosaic: int = SEG_CLOSE_MOSAIC,
 ) -> None:
     data_yaml = Path(data).resolve() if data else SEG_DATASET_YAML
-    if not data_yaml.exists():
-        raise FileNotFoundError(
-            f"{data_yaml} not found. Run generate_seg_labels.py first."
-        )
+    validate_dataset_yaml(data_yaml, task="seg")
 
     model = YOLO(model_name)
     kwargs = base_train_kwargs(
@@ -58,6 +58,7 @@ def train(
     model.train(**kwargs)
     weights = ROOT / "football_tracker_seg" / name / "weights" / "best.pt"
     print(f"Training complete. Weights: {weights}")
+    print(f"Inference default: SEG_MODEL_PATH or --model {weights}")
     print("Run: python -m src.validate_seg")
 
 
@@ -65,7 +66,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--device", default="mps")
-    parser.add_argument("--name", default="run_v1")
+    parser.add_argument("--name", default=CANONICAL_SEG_RUN)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument(
         "--freeze",

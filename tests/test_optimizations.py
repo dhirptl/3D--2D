@@ -174,7 +174,7 @@ def test_build_raw_lab4d_vector_valid():
     mask[20:70, 15:45] = 255
     vec = build_raw_lab4d_vector(frame, mask, (10, 15, 50, 75))
     assert vec is not None
-    assert vec.shape == (4,)
+    assert vec.shape == (6,)
 
 
 def test_build_raw_lab4d_vector_stale_mask():
@@ -336,11 +336,11 @@ def test_majority_vote_counter():
 
 
 def test_normalize_batch_features():
-    vecs = np.random.rand(5, 4).astype(np.float64) * 50 + 100
+    vecs = np.random.rand(5, 6).astype(np.float64) * 50 + 100
     scaler = StandardScaler()
     scaler.fit(vecs[:, SCALER_LAB_COLS])
     out = normalize_batch_features(vecs, scaler)
-    assert out.shape == (5, 4)
+    assert out.shape == (5, 6)
 
 
 def test_prefilter_drops_neutral():
@@ -356,8 +356,8 @@ def test_prefilter_drops_neutral():
 
 
 def test_is_referee_lab():
-    ref = np.array([128, 128, 20, 25], dtype=float)
-    team = np.array([200, 90, 10, 12], dtype=float)
+    ref = np.array([128, 128, 20, 25, 60.0, 5.0], dtype=float)
+    team = np.array([200, 90, 10, 12, 30.0, 10.0], dtype=float)
     assert is_referee(ref)
     assert not is_referee(team)
 
@@ -428,9 +428,10 @@ def test_adaptive_hud_filter_uses_field_mask():
         tids,
         field_mask=field_mask,
     )
-    assert kept_xyxy.shape == (1, 4)
-    assert kept_confs.shape == (1,)
-    assert kept_ids.tolist() == [3]
+    # Wider field margins keep center + lower sideline boxes; top HUD box still dropped.
+    assert kept_xyxy.shape[0] >= 1
+    assert 3 in kept_ids.tolist()
+    assert 1 not in kept_ids.tolist()
 
 
 def test_helmet_every_reuses_cached_detections():
@@ -464,7 +465,7 @@ def test_helmet_every_reuses_cached_detections():
 def test_warmup_per_track_cap():
     clf = FootballTeamClassifier()
     clf.field_hsv_ready = False
-    raw = np.array([200, 90, 10, 12], dtype=float)
+    raw = np.array([200, 90, 10, 12, 30.0, 10.0], dtype=float)
     mask = np.ones((50, 30), dtype=np.uint8) * 255
     det = {"conf": 0.9, "bbox": (10, 10, 40, 60)}
     for i in range(5):
@@ -479,7 +480,7 @@ def test_warmup_per_track_cap():
 def test_quality_eviction_drops_worst():
     clf = FootballTeamClassifier()
     clf.field_hsv_ready = False
-    raw = np.array([200, 90, 10, 12], dtype=float)
+    raw = np.array([200, 90, 10, 12, 30.0, 10.0], dtype=float)
     mask = np.ones((50, 30), dtype=np.uint8) * 255
     cap = WARMUP_VECTOR_CAP
     clf.warmup_vectors = [raw.copy() for _ in range(WARMUP_VECTOR_CAP)]
@@ -506,8 +507,8 @@ def test_classifier_locks_on_synthetic_vectors():
     clf = FootballTeamClassifier()
     clf.field_hsv_ready = True
     clf.warmup_min_unique_tracks = 2
-    team_a = np.array([180, 90, 8, 10], dtype=float)
-    team_b = np.array([90, 180, 9, 11], dtype=float)
+    team_a = np.array([180, 90, 8, 10, 30.0, 10.0], dtype=float)
+    team_b = np.array([90, 180, 9, 11, 120.0, 10.0], dtype=float)
     for i in range(55):
         tid = i % 15
         clf.warmup_vectors.append(team_a if tid % 2 == 0 else team_b)
@@ -522,8 +523,8 @@ def test_classifier_locks_on_synthetic_vectors():
 def test_classifier_locks_with_lower_warmup_thresholds():
     clf = FootballTeamClassifier()
     clf.field_hsv_ready = True
-    team_a = np.array([180, 90, 8, 10], dtype=float)
-    team_b = np.array([90, 180, 9, 11], dtype=float)
+    team_a = np.array([180, 90, 8, 10, 30.0, 10.0], dtype=float)
+    team_b = np.array([90, 180, 9, 11, 120.0, 10.0], dtype=float)
 
     for i in range(QUALITY_FRAMES):
         tid = i % WARMUP_MIN_UNIQUE_TRACKS
@@ -674,7 +675,7 @@ def test_spatial_calibration_rejects_low_relative_separation():
 
 
 def test_feature_version():
-    assert FEATURE_VERSION == "lab4d_v1"
+    assert FEATURE_VERSION == "lab6d_v1"
 
 
 def test_full_pipeline_synthetic():
@@ -721,7 +722,7 @@ def test_warmup_frame_tick_once_per_frame():
     """_warmup_frame_tick must be called once per process_frame, not once per detection."""
     clf = FootballTeamClassifier()
     clf.field_hsv_ready = False
-    raw = np.array([200, 90, 10, 12], dtype=float)
+    raw = np.array([200, 90, 10, 12, 30.0, 10.0], dtype=float)
     mask = np.ones((50, 30), dtype=np.uint8) * 255
     # 10 detections all with same track structure
     detections = [
@@ -898,6 +899,110 @@ def test_reset_tracker_no_predictor_no_crash():
     pm._reset_tracker(_BareModel())  # should not raise
 
 
+def test_run_tracker_imports_player_class_id():
+    from src.config import PLAYER_CLASS_ID
+    from src import run_tracker
+
+    assert PLAYER_CLASS_ID == 0
+    src = open(run_tracker.__file__).read()
+    assert "PLAYER_CLASS_ID" in src
+
+
+def test_extract_tracked_detections_masks_none_fallback():
+    from src.detection import extract_tracked_detections
+
+    class _Boxes:
+        def __init__(self):
+            import torch
+
+            self.xyxy = torch.tensor([[10.0, 10.0, 50.0, 80.0]])
+            self.conf = torch.tensor([0.9])
+            self.id = torch.tensor([1.0])
+
+    class _Result:
+        boxes = _Boxes()
+        masks = None
+
+    class _Model:
+        def track(self, *args, **kwargs):
+            return [_Result()]
+
+    dets = extract_tracked_detections(_Model(), np.zeros((100, 100, 3), dtype=np.uint8))
+    assert len(dets) == 1
+    assert dets[0]["mask_fallback"] is True
+    assert mask_area(dets[0]["mask"]) > 0
+
+
+def test_filter_by_field_area_low_threshold():
+    from src.post_process import filter_by_field_area
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    mask = np.zeros((100, 100), dtype=np.uint8)
+    mask[85:95, 40:60] = 255
+    xyxy = np.array([[40, 70, 60, 95]], dtype=float)
+    confs = np.array([0.9])
+    tids = np.array([1])
+    kept, _, _ = filter_by_field_area(frame, xyxy, confs, tids, mask, min_field_frac=0.05)
+    assert len(kept) == 1
+
+
+def test_camera_cut_requires_two_consecutive_frames():
+    import src.pipeline as pm
+
+    reset_count = [0]
+    original = pm._reset_tracker
+
+    def counting_reset(model):
+        reset_count[0] += 1
+
+    pm._reset_tracker = counting_reset
+    try:
+        ctx = VideoPipelineContext(model=None, classifier=FootballTeamClassifier())
+        prev = np.zeros((10, 10, 3), dtype=np.uint8)
+        cut = np.full((10, 10, 3), 200, dtype=np.uint8)
+        ctx.prev_frame = prev
+        ctx.field_hsv_bounds = (35, 85, 40, 40)
+        pm.extract_tracked_detections = lambda *a, **kw: []
+
+        pm.process_video_frame(cut, ctx)
+        assert reset_count[0] == 0
+        ctx.prev_frame = cut
+        other = np.full((10, 10, 3), 50, dtype=np.uint8)
+        pm.process_video_frame(other, ctx)
+        assert reset_count[0] == 1
+    finally:
+        pm._reset_tracker = original
+
+
+def test_dataset_yaml_rejects_legacy_two_class():
+    from src.dataset_yaml import validate_dataset_yaml
+
+    legacy = Path(__file__).resolve().parent.parent / "data.yaml"
+    try:
+        validate_dataset_yaml(legacy, task="seg")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "nc=1" in str(e)
+
+
+def test_team_accuracy_iou_beats_track_id_on_id_switch():
+    from src.eval_clip import _score_team_accuracy
+
+    ann = Path(__file__).resolve().parent / "_tmp_iou_ann.csv"
+    ann.write_text(
+        "frame,track_id,correct_team,x1,y1,x2,y2\n"
+        "0,99,1,10,10,50,80\n"
+    )
+    labels_wrong_id = {(0, 99): 0}
+    labels_iou = {(0, 1): 1}
+    bboxes = {(0, 1): (12, 12, 48, 78)}
+    by_id = _score_team_accuracy(ann, labels_wrong_id, bboxes, team_match="track_id")
+    by_iou = _score_team_accuracy(ann, labels_iou, bboxes, team_match="iou")
+    ann.unlink(missing_ok=True)
+    assert by_id is not None and by_id["pct"] == 0.0
+    assert by_iou is not None and by_iou["pct"] == 100.0
+
+
 def test_camera_cut_cooldown_prevents_repeated_resets():
     """Consecutive high-MAD frames only trigger one tracker reset, not N."""
     import src.pipeline as pm
@@ -922,12 +1027,18 @@ def test_camera_cut_cooldown_prevents_repeated_resets():
         original_extract = pm.extract_tracked_detections
         pm.extract_tracked_detections = lambda *a, **kw: []
 
-        for _ in range(5):  # 5 consecutive high-MAD frames
+        # Two consecutive high-MAD frames trigger one reset; cooldown blocks the rest.
+        pm.process_video_frame(cut, ctx)
+        ctx.prev_frame = cut
+        other = np.full((10, 10, 3), 50, dtype=np.uint8)
+        pm.process_video_frame(other, ctx)
+        ctx.prev_frame = other
+        for _ in range(3):
             pm.process_video_frame(cut, ctx)
             ctx.prev_frame = cut
 
         assert reset_count[0] == 1, (
-            f"Expected 1 tracker reset for 5 consecutive cuts, got {reset_count[0]}"
+            f"Expected 1 tracker reset, got {reset_count[0]}"
         )
     finally:
         pm._reset_tracker = original
