@@ -4,11 +4,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-DEFAULT_EPOCHS = 100
-DEFAULT_PATIENCE = 30
+DEFAULT_EPOCHS = 150
+DEFAULT_PATIENCE = 40
 DEFAULT_FREEZE = 10
-DEFAULT_BATCH = 8
-DEFAULT_IMGSZ = 736
+DEFAULT_BATCH = 2
+DEFAULT_IMGSZ = 1280
 DEFAULT_DEVICE = "mps"
 
 
@@ -35,7 +35,7 @@ def base_train_kwargs(
         "fliplr": 0.5,
         "hsv_h": 0.015,
         "hsv_s": 0.7,
-        "scale": 0.5,
+        "scale": 0.7,
         "translate": 0.1,
         "device": device,
         "project": project,

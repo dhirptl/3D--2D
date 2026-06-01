@@ -5,9 +5,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # --- Detection / tracking ---
 PLAYER_CLASS_ID = 0
 PLAYER_IMGSZ = 1280
-PLAYER_PREDICT_CONF = 0.20
+PLAYER_PREDICT_CONF = 0.18
 PLAYER_PREDICT_IOU = 0.45
-PLAYER_PREDICT_MAX_DET = 80
+PLAYER_PREDICT_MAX_DET = 100
 
 HUD_TOP_PCT = 0.10
 HUD_BOTTOM_PCT = 0.15
@@ -34,16 +34,16 @@ MIN_UPPER_MASK_PIXELS = 50
 MODEL_PATH = ROOT / "football_tracker" / "run_v1" / "weights" / "best.pt"
 
 # Segmentation model (primary)
-SEG_MODEL_PATH = ROOT / "football_tracker_seg" / "run_v2" / "weights" / "best.pt"
+SEG_MODEL_PATH = ROOT / "football_tracker_seg" / "run_v3-3" / "weights" / "best.pt"
 SEG_BBOX_SOURCE_ROOT = ROOT / "merged_football_dataset_v2"
 SEG_DATASET_ROOT = ROOT / "merged_football_dataset_v2_seg"
 SEG_DATASET_YAML = SEG_DATASET_ROOT / "data.yaml"
 SEG_TRAIN_MODEL = "yolo11s-seg.pt"
-SEG_MASK_RATIO = 2
+SEG_MASK_RATIO = 4
 SEG_TRAIN_DEGREES = 5.0
 SEG_TRAIN_ERASING = 0.3
-SEG_TRAIN_COPY_PASTE = 0.1
-SEG_CLOSE_MOSAIC = 15
+SEG_TRAIN_COPY_PASTE = 0.4
+SEG_CLOSE_MOSAIC = 20
 
 DATASET_YAML = ROOT / "football_dataset" / "data.yaml"
 HELMET_DATASET_YAML = ROOT / "football_dataset_helmet" / "data.yaml"
@@ -53,7 +53,7 @@ HELMET_MODEL_PATH = ROOT / "football_tracker_helmet" / "run_v1" / "weights" / "b
 SAM_MODEL = "sam_l.pt"
 MASK_MIN_AREA_FLOOR = 400
 MASK_MIN_AREA_BOX_FRAC = 0.20
-MASK_MIN_BOX_IOU = 0.50
+MASK_MIN_BOX_IOU = 0.65
 MASK_BOX_PAD_FRAC = 0.05
 MASK_PREVIEW_COUNT = 50
 
@@ -70,6 +70,7 @@ EVAL_MIN_LOCKED_PCT = 85.0
 EVAL_MAX_LABEL_FLIP_RATE = 0.10
 EVAL_MAX_LOCKED_FRAME = 900
 EVAL_MIN_TEAM_ACCURACY_PCT = 90.0
+EVAL_MAX_TRACK_ID_CHANGE_RATE = 0.40
 
 # --- Team classification (TDD Part 9) ---
 WARMUP_CONF_MIN = 0.45
@@ -90,7 +91,7 @@ MINIMUM_CENTROID_DISTANCE = 1.5
 MINIMUM_CENTROID_DISTANCE_FALLBACK = 1.0
 CALIBRATION_FAIL_MAX = 3
 CALIBRATION_VERSION = 2
-FEATURE_VERSION = "lab6d_v1"
+FEATURE_VERSION = "lab6d_v2"
 
 FIELD_HSV_AUTO_FRAMES = 30
 
@@ -193,6 +194,9 @@ SIMILAR_COLOR_AVG_DIST_THRESHOLD = 0.8
 
 # Bounding box EMA smoothing (0 = off, 1 = no smoothing)
 BBOX_EMA_ALPHA = 0.6
+
+# Duplicate suppression after tracking
+DUPLICATE_SUPPRESS_IOU = 0.70
 
 # Half-precision inference (FP16). Significant speedup on CUDA; variable on MPS.
 PLAYER_PREDICT_HALF = False

@@ -260,9 +260,10 @@ def _helmet_detections(
         ctx._helmet_cache_frame = ctx.frame_idx
         return []
 
-    helmets = detect_helmets(
+    helmets = detect_helmets_roi(
         _helmet_model(ctx),
         frame,
+        detections,
         conf=ctx.helmet_conf,
     )
     ctx._last_helmets = helmets

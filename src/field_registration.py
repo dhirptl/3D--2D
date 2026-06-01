@@ -179,6 +179,7 @@ class FieldRegistration:
         self.homography_stale = False
         self.reproj_error: float | None = None
         self.inlier_count = 0
+        self._prev_gray: np.ndarray | None = None
 
     def reset(self) -> None:
         self.homography = None
@@ -187,8 +188,56 @@ class FieldRegistration:
         self.homography_stale = False
         self.reproj_error = None
         self.inlier_count = 0
+        self._prev_gray = None
+
+    def _propagate_with_camera_motion(self, frame: np.ndarray) -> None:
+        """Compose lightweight frame-to-frame motion into existing homography."""
+        if self.homography is None:
+            self._prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            return
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if self._prev_gray is None:
+            self._prev_gray = gray
+            return
+
+        prev_pts = cv2.goodFeaturesToTrack(
+            self._prev_gray,
+            maxCorners=300,
+            qualityLevel=0.01,
+            minDistance=8,
+        )
+        if prev_pts is None or len(prev_pts) < 12:
+            self._prev_gray = gray
+            return
+        cur_pts, st, _err = cv2.calcOpticalFlowPyrLK(self._prev_gray, gray, prev_pts, None)
+        if cur_pts is None or st is None:
+            self._prev_gray = gray
+            return
+        keep = st.reshape(-1).astype(bool)
+        src = prev_pts.reshape(-1, 2)[keep]
+        dst = cur_pts.reshape(-1, 2)[keep]
+        if len(src) < 12:
+            self._prev_gray = gray
+            return
+        affine, inliers = cv2.estimateAffinePartial2D(
+            src,
+            dst,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=3.0,
+        )
+        if affine is None or inliers is None or int(inliers.sum()) < 10:
+            self._prev_gray = gray
+            return
+        a = np.vstack([affine, [0.0, 0.0, 1.0]])
+        try:
+            a_inv = np.linalg.inv(a)
+            self.homography = self.homography @ a_inv
+        except np.linalg.LinAlgError:
+            pass
+        self._prev_gray = gray
 
     def update(self, frame: np.ndarray, *, hsv: np.ndarray | None = None) -> bool:
+        self._propagate_with_camera_motion(frame)
         fh, fw = frame.shape[:2]
         line_mask = _yard_line_mask(frame, hsv)
         segments = _detect_line_segments(frame, line_mask)

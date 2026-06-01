@@ -36,6 +36,8 @@ from src.config import (
 from src.detection import DetectionStats, extract_tracked_detections
 from src.draw import draw_teams
 from src.mask_utils import mask_area
+from src.pass1_perception import run_pass1
+from src.pass2_analysis import run_pass2
 from src.pipeline import VideoPipelineContext, process_video_frame
 from src.team_classifier import FootballTeamClassifier
 from src.video_pipeline import run_with_read_ahead
@@ -97,7 +99,34 @@ def run(
     player_imgsz: int = PLAYER_IMGSZ,
     player_max_det: int = PLAYER_PREDICT_MAX_DET,
     player_half: bool = PLAYER_PREDICT_HALF,
+    offline_pass2: bool = False,
+    offline_out_dir: str | None = None,
+    homography_json: str | None = None,
+    annotations_csv: str | None = None,
 ) -> None:
+    if offline_pass2:
+        out_dir = Path(offline_out_dir) if offline_out_dir else (CONFIG_ROOT / "outputs" / "pass2")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ir_path = out_dir / f"{Path(source).stem}_pass1.parquet"
+        run_pass1(
+            Path(source),
+            ir_path,
+            model_path=model_path or SEG_MODEL_PATH,
+            player_conf=player_conf,
+            player_iou=player_iou,
+            player_imgsz=player_imgsz,
+            player_max_det=player_max_det,
+            helmet_model=helmet_model_path if require_helmet else None,
+        )
+        metrics = run_pass2(
+            ir_path,
+            out_dir,
+            homography_json=Path(homography_json) if homography_json else None,
+            annotations_csv=Path(annotations_csv) if annotations_csv else None,
+        )
+        print(f"Offline Pass2 complete. Metrics: {metrics}")
+        return
+
     weights = model_path or SEG_MODEL_PATH
     if not weights.exists():
         raise FileNotFoundError(
@@ -436,6 +465,26 @@ def main() -> None:
         default=HELMET_GATE_GRACE,
         help="Allow this many initial frames before helmet confirmation is required",
     )
+    parser.add_argument(
+        "--offline-pass2",
+        action="store_true",
+        help="Run Pass1/Pass2 offline pipeline instead of online tracker video rendering",
+    )
+    parser.add_argument(
+        "--offline-out-dir",
+        default=None,
+        help="Output directory for offline pass1/pass2 artifacts",
+    )
+    parser.add_argument(
+        "--homography-json",
+        default=None,
+        help="Optional manual homography JSON for Pass2 route projection",
+    )
+    parser.add_argument(
+        "--annotations-csv",
+        default=None,
+        help="Optional annotation CSV for Pass2 route metrics",
+    )
     args = parser.parse_args()
 
     run(
@@ -472,6 +521,10 @@ def main() -> None:
         player_imgsz=args.player_imgsz,
         player_max_det=args.player_max_det,
         player_half=args.half,
+        offline_pass2=args.offline_pass2,
+        offline_out_dir=args.offline_out_dir,
+        homography_json=args.homography_json,
+        annotations_csv=args.annotations_csv,
     )
 
 

@@ -13,6 +13,7 @@ from ultralytics import YOLO
 from src.config import (
     EVAL_MAX_LABEL_FLIP_RATE,
     EVAL_MAX_LOCKED_FRAME,
+    EVAL_MAX_TRACK_ID_CHANGE_RATE,
     EVAL_MAX_ZERO_DET_FRAC,
     EVAL_MIN_AVG_DETECTIONS,
     EVAL_MIN_LOCKED_PCT,
@@ -123,6 +124,7 @@ def _release_gate(
     ) or (report["final_state"] == "LOCKED" and calibration_loaded)
     ok_flips = report["label_flip_rate"] <= EVAL_MAX_LABEL_FLIP_RATE
     ok_team_acc = team_acc is None or team_acc["pct"] >= EVAL_MIN_TEAM_ACCURACY_PCT
+    ok_track_churn = report.get("track_id_change_rate", 0.0) <= EVAL_MAX_TRACK_ID_CHANGE_RATE
 
     criteria = {
         "detections": ok_dets,
@@ -131,6 +133,7 @@ def _release_gate(
         "early_lock": ok_early,
         "label_stability": ok_flips,
         "team_accuracy": ok_team_acc,
+        "track_churn": ok_track_churn,
     }
     if not require_early_lock:
         criteria_for_overall = {k: v for k, v in criteria.items() if k != "early_lock"}
@@ -395,6 +398,10 @@ def main() -> None:
     print(f"  Zero-det target (rate<={EVAL_MAX_ZERO_DET_FRAC:.0%}): {'PASS' if criteria['zero_det'] else 'FAIL'}")
     print(f"  LOCKED target (>={EVAL_MIN_LOCKED_PCT:.0f}% or final LOCKED): {'PASS' if criteria['locked'] else 'FAIL'}")
     print(f"  Label stability target (flip_rate<={EVAL_MAX_LABEL_FLIP_RATE:.2f}): {'PASS' if criteria['label_stability'] else 'FAIL'}")
+    print(
+        f"  Track churn target (rate<={EVAL_MAX_TRACK_ID_CHANGE_RATE:.2f}): "
+        f"{'PASS' if criteria['track_churn'] else 'FAIL'}"
+    )
     team_acc = report.get("team_accuracy")
     if team_acc is not None:
         print(

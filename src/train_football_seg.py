@@ -17,7 +17,7 @@ from src.config import (
 from src.dataset_yaml import validate_dataset_yaml
 from src.train_common import DEFAULT_IMGSZ, ROOT, base_train_kwargs
 
-CANONICAL_SEG_RUN = "run_v2"
+CANONICAL_SEG_RUN = "run_v3"
 
 
 def train(

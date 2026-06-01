@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 
 from src.config import (
+    DUPLICATE_SUPPRESS_IOU,
     FIELD_HSV_HUE_HIGH,
     FIELD_HSV_HUE_LOW,
     FIELD_HSV_SAT_LOW,
@@ -75,7 +76,7 @@ def filter_hud_detections(frame_shape, xyxy, confs, track_ids, *, field_mask: np
 
 
 def suppress_duplicate_tracks(
-    detections: list[dict], iou_thresh: float = 0.50
+    detections: list[dict], iou_thresh: float = DUPLICATE_SUPPRESS_IOU
 ) -> list[dict]:
     """Remove lower-confidence tracks that heavily overlap a higher-confidence track."""
     if len(detections) <= 1:

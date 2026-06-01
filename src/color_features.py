@@ -160,18 +160,34 @@ def extract_lab_ab_stats(lab_image: np.ndarray, band_mask: np.ndarray) -> np.nda
     return np.array([a.mean(), b.mean(), a.std(), b.std()], dtype=np.float64)
 
 
+def _circular_hue_stats(hue: np.ndarray) -> tuple[float, float]:
+    """Circular mean/std for OpenCV hue values in [0, 180)."""
+    if hue.size == 0:
+        return 0.0, 0.0
+    ang = hue.astype(np.float64) * (2.0 * np.pi / 180.0)
+    s = float(np.sin(ang).mean())
+    c = float(np.cos(ang).mean())
+    mean_rad = np.arctan2(s, c) % (2.0 * np.pi)
+    mean_h = float(mean_rad * (180.0 / (2.0 * np.pi)))
+    r = float(np.hypot(s, c))
+    r = max(r, 1e-9)
+    std_h = float(np.sqrt(-2.0 * np.log(r)) * (180.0 / (2.0 * np.pi)))
+    return mean_h, std_h
+
+
 def extract_lab_ab_hue_stats(
     lab_image: np.ndarray, hsv_image: np.ndarray, band_mask: np.ndarray
 ) -> np.ndarray | None:
-    """6D feature: mean_A, mean_B, std_A, std_B, mean_H, std_H."""
+    """6D feature: mean_A, mean_B, std_A, std_B, circ_mean_H, circ_std_H."""
     pixels_lab = lab_image[band_mask > 0]
     if len(pixels_lab) < MIN_COLOR_PIXELS:
         return None
     a = pixels_lab[:, 1].astype(np.float32)
     b = pixels_lab[:, 2].astype(np.float32)
     h = hsv_image[band_mask > 0][:, 0].astype(np.float32)
+    mean_h, std_h = _circular_hue_stats(h)
     return np.array(
-        [a.mean(), b.mean(), a.std(), b.std(), h.mean(), h.std()], dtype=np.float64
+        [a.mean(), b.mean(), a.std(), b.std(), mean_h, std_h], dtype=np.float64
     )
 
 
