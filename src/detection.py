@@ -1,6 +1,8 @@
 """Extract tracked detections with bbox-crop masks from YOLO-Seg + tracker."""
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,9 +25,22 @@ from src.mask_utils import (
     mask_area,
     match_indices,
 )
-from src.post_process import filter_hud_detections
+from src.post_process import _hud_limits, filter_hud_detections
 
 logger = logging.getLogger(__name__)
+
+# Zero-detection decomposition: env-gated, zero-cost in production. Set ZERODET_DEBUG to a
+# path to log which path produced each zero-det frame (ID_NONE vs HUD_ATE_ALL), then feed the
+# JSONL to zerodet_decompose.py. See plan: zero_det_rate conflates >=5 distinct phenomena.
+_ZERODET_LOG = os.environ.get("ZERODET_DEBUG")  # path or None
+if _ZERODET_LOG:
+    open(_ZERODET_LOG, "w").close()  # truncate once at import so runs don't accumulate stale frames
+
+
+def _zerodet_emit(rec: dict) -> None:
+    if _ZERODET_LOG:
+        with open(_ZERODET_LOG, "a") as f:
+            f.write(json.dumps(rec) + "\n")
 
 
 @dataclass
@@ -109,6 +124,8 @@ def extract_tracked_detections(
     result = results[0]
 
     if result.boxes is None or result.boxes.id is None:
+        n_raw = 0 if result.boxes is None else len(result.boxes)
+        _zerodet_emit({"frame": frame_idx, "path": "ID_NONE", "raw_boxes": n_raw})
         if stats:
             stats.record(0)
         return []
@@ -127,10 +144,21 @@ def extract_tracked_detections(
 
     xyxy = orig_xyxy
     if apply_hud_filter:
+        n_before_hud = len(xyxy)
+        pre_hud_xyxy = orig_xyxy
         xyxy, confs, track_ids = filter_hud_detections(
             frame.shape, xyxy, confs, track_ids, field_mask=field_mask
         )
         if len(xyxy) == 0:
+            fm = "none" if field_mask is None else ("empty" if not field_mask.any() else "valid")
+            rec = {"frame": frame_idx, "path": "HUD_ATE_ALL",
+                   "raw_boxes": int(n_before_hud), "field_mask": fm}
+            if _ZERODET_LOG:  # only compute band diagnostics when logging
+                top_lim, bot_lim = _hud_limits(frame.shape, field_mask=field_mask)
+                rec["frame_h"] = int(frame.shape[0])
+                rec["band"] = [round(float(top_lim), 1), round(float(bot_lim), 1)]
+                rec["box_cy"] = [round(float((b[1] + b[3]) / 2), 1) for b in pre_hud_xyxy]
+            _zerodet_emit(rec)
             if stats:
                 stats.record(0)
             return []
