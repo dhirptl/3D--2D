@@ -1,4 +1,9 @@
-"""Pass 2: analysis-only stage over Pass 1 IR."""
+"""Pass 2: analysis-only stage over Pass 1 IR.
+
+Team labels use clip-level offline clustering (see offline_teams). Route boundaries
+use the first detected snap only; multi-play clips are not split into per-play
+routes until multi-snap detection is added and validated.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from src.detect_snap import detect_snap_frame, trim_routes
 from src.eval_routes import compute_route_metrics
 from src.field_registration import FieldRegistration
 from src.jersey_ocr import aggregate_numbers
-from src.offline_teams import assign_teams_offline, split_on_cuts
+from src.offline_teams import assign_teams_offline, resolve_source_clip
 from src.stitch_tracklets import stitch_tracklets
 
 
@@ -43,8 +48,8 @@ def run_pass2(
     if df.empty:
         raise RuntimeError("IR is empty.")
 
-    segments = split_on_cuts(df)
-    df = assign_teams_offline(df, segments=segments)
+    video = resolve_source_clip(source_clip, ir_path)
+    df = assign_teams_offline(df, source_clip=video, ir_path=ir_path)
     df = stitch_tracklets(df, max_gap=max_gap, max_dist_px=max_dist_px)
 
     # Re-vote teams on stable IDs after stitching.

@@ -11,6 +11,8 @@ import numpy as np
 from ultralytics import YOLO
 
 from src.config import (
+    BOTSORT_CFG,
+    BYTETRACK_CFG,
     EVAL_MAX_LABEL_FLIP_RATE,
     EVAL_MAX_LOCKED_FRAME,
     EVAL_MAX_TRACK_ID_CHANGE_RATE,
@@ -171,6 +173,7 @@ def eval_clip(
     helmet_gate_grace: int = HELMET_GATE_GRACE,
     team_match: str = "track_id",
     debug_filters: bool = False,
+    tracker: str = "bytetrack",
 ) -> dict:
     weights = model_path or SEG_MODEL_PATH
     if not weights.exists():
@@ -185,9 +188,11 @@ def eval_clip(
 
     model = YOLO(str(weights))
     classifier = FootballTeamClassifier()
+    tracker_path = BOTSORT_CFG if tracker == "botsort" else BYTETRACK_CFG
     ctx = VideoPipelineContext(
         model=model,
         classifier=classifier,
+        tracker_cfg=tracker_path,
         player_conf=player_conf,
         player_iou=player_iou,
         player_imgsz=max(64, int(player_imgsz)),
@@ -356,6 +361,12 @@ def main() -> None:
     )
     parser.add_argument("--debug-filters", action="store_true")
     parser.add_argument(
+        "--tracker",
+        choices=("botsort", "bytetrack"),
+        default="bytetrack",
+        help="Tracker config (default: bytetrack)",
+    )
+    parser.add_argument(
         "--annotations",
         default=str(DEFAULT_ANNOTATIONS),
         help="CSV with frame,track_id,correct_team for accuracy",
@@ -380,6 +391,7 @@ def main() -> None:
         args.helmet_gate_grace,
         team_match=args.team_match,
         debug_filters=args.debug_filters,
+        tracker=args.tracker,
     )
 
     print("--- Clip Evaluation ---")

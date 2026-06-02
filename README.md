@@ -1,6 +1,6 @@
 # Football Player Detection, Tracking & Team Classification
 
-YOLOv11n-Seg + BoT-SORT (Re-ID) + automatic team color classification (WARMUP → LOCKED).
+YOLOv11n-Seg + ByteTrack (default) + automatic team color classification (WARMUP → LOCKED).
 
 Color pipeline: mask isolate → turf subtract (green-safeguard) → YOLO-Pose torso polygon (or aspect-aware upper body) → LAB L-channel CLAHE → **4D LAB chrominance** (`lab4d_v1`) → KMeans **k=2** after pre-filtering. Playable area uses **homography** from yard lines when valid, with HSV fallback.
 
@@ -84,7 +84,10 @@ Guidance:
 | `--show-masks` | Overlay seg masks (ROI blend) |
 | `--load-calibration` | Reuse team centroids (`feature_version=lab4d_v1` pickle only) |
 | `--save-calibration` | Save centroids after LOCKED |
-| `--tracker botsort\|bytetrack` | Tracker config (default: `botsort` with Re-ID) |
+| `--tracker botsort\|bytetrack` | Tracker config (default: `bytetrack`) |
+| `--save-kmeans-crops` | Dump torso-masked BGR tiles used for KMeans features |
+| `--debug-crops-dir PATH` | Output dir for crop debug (default: `outputs/debug_crops`) |
+| `--debug-crops-max-frames N` | Stop saving debug crops after frame N |
 | `--pose-every N` | YOLO-Pose every N frames (default 1) |
 | `--no-pose` | Disable pose torso sampling |
 | `--dump-detections` | Stream CSV (includes `team_label`, distances) |

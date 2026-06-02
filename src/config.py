@@ -160,9 +160,13 @@ HELMET_GATE_GRACE = 15
 HELMET_GATE_SOFT_LOCK_STREAK = 7
 HELMET_GATE_LOCKED_REQUIRED = 1
 
-# Tracker (default BoT-SORT + Re-ID)
-TRACKER_CFG = ROOT / "configs" / "botsort.yaml"
+# Tracker (default ByteTrack; BoT-SORT available via --tracker botsort)
+BOTSORT_CFG = ROOT / "configs" / "botsort.yaml"
 BYTETRACK_CFG = ROOT / "configs" / "bytetrack.yaml"
+TRACKER_CFG = BYTETRACK_CFG
+
+# Feature debug crop dump (run_tracker --save-kmeans-crops)
+DEBUG_CROP_DIR = ROOT / "outputs" / "debug_crops"
 
 # Warmup timeout & progressive relaxation
 WARMUP_FRAME_TIMEOUT = 1500
@@ -206,6 +210,10 @@ PLAYER_PREDICT_HALF = False
 DETECT_EVERY_DEFAULT = 1
 KMEANS_N_INIT = 10
 KMEANS_RANDOM_STATE = 42
+
+# Offline team assignment: re-cluster per camera segment only if luminance differs
+OFFLINE_BRIGHTNESS_SPLIT_DELTA = 15.0  # gray mean 0-255 across cut segments
+OFFLINE_BRIGHTNESS_LUMINANCE_STRIDE = 30  # sample every N frames per segment
 FIELD_HSV_MAX_PIXELS = 50_000
 WARMUP_VECTOR_CAP = QUALITY_FRAMES * 2
 PIPELINE_THREADS_DEFAULT = 4

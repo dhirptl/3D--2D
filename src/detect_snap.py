@@ -1,4 +1,10 @@
-"""Snap detection and route anchoring utilities."""
+"""Snap detection and route anchoring utilities.
+
+Route windows currently anchor on the first detected snap only. Long multi-play
+clips (e.g. la v seahawks.mp4) produce valid team labels across mid-play camera
+cuts but route output is only trustworthy for the first play until multi-snap
+detection is implemented and validated against ground truth.
+"""
 
 from __future__ import annotations
 

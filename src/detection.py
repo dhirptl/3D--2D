@@ -93,7 +93,7 @@ def extract_tracked_detections(
         return []
 
     cfg = tracker_cfg or TRACKER_CFG
-    tracker = str(cfg) if cfg.exists() else "botsort.yaml"
+    tracker = str(cfg) if cfg.exists() else "bytetrack.yaml"
     conf = PLAYER_PREDICT_CONF if player_conf is None else player_conf
     iou = PLAYER_PREDICT_IOU if player_iou is None else player_iou
     imgsz = PLAYER_IMGSZ if player_imgsz is None else player_imgsz
