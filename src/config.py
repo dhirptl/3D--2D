@@ -128,6 +128,7 @@ FIELD_REG_TEMPLATE_W = 1200
 FIELD_REG_TEMPLATE_H = 533
 FIELD_REG_UPDATE_STRIDE_STABLE = 15  # frames to skip per Hough+RANSAC when locked
 FIELD_REG_STABLE_STREAK = 5          # valid_streak depth considered stable
+FIELD_REG_MIN_PROJ_AREA_FRAC = 0.08  # reject collapsed template projection (gap 0.05–0.12 on 1minclip)
 
 # Shared field ROI fractions (calibration, rolling update, green fraction)
 FIELD_ROI_Y0_FRAC = 0.35
