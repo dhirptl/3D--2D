@@ -485,6 +485,11 @@ def main() -> None:
         default=None,
         help="Optional annotation CSV for Pass2 route metrics",
     )
+    parser.add_argument(
+        "--no-pass1-gate",
+        action="store_true",
+        help="Skip the Pass1 quality gate (allows experimental runs to proceed to Pass2)",
+    )
     args = parser.parse_args()
 
     run(
