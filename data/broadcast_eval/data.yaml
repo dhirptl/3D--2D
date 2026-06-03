@@ -1,0 +1,6 @@
+path: /Users/dhirpatel/3D->2D /data/broadcast_eval
+train: images
+val: images
+nc: 1
+names:
+- Player
