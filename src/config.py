@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # --- Detection / tracking ---
 PLAYER_CLASS_ID = 0
 PLAYER_IMGSZ = 1280
-PLAYER_PREDICT_CONF = 0.40
+PLAYER_PREDICT_CONF = 0.18
 PLAYER_PREDICT_IOU = 0.45
 PLAYER_PREDICT_MAX_DET = 100
 
