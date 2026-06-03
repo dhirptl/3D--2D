@@ -325,6 +325,7 @@ class FieldRegistration:
 
     def _invalidate_streak(self) -> None:
         self.valid_streak = max(0, self.valid_streak - 1)
+        self.homography = None
         if self.valid_streak < FIELD_REG_VALID_STREAK:
             self.homography_stale = True
             self.registration_valid = False
