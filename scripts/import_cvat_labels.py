@@ -1,11 +1,15 @@
-"""Import corrected CVAT YOLO 1.1 export back into data/broadcast_eval/labels/.
+"""Import corrected Roboflow YOLOv8 export back into data/broadcast_eval/labels/.
 
 Usage:
-  python scripts/import_cvat_labels.py <cvat_export.zip>
+  python scripts/import_cvat_labels.py <roboflow_export.zip>
 
-The CVAT YOLO 1.1 export zip contains obj_train_data/*.txt (one per image).
-This script extracts those label files and writes them to
-data/broadcast_eval/labels/, replacing the pre-labels from build_eval_set.py.
+Roboflow's YOLOv8 export zip structure:
+  ├── data.yaml
+  ├── train/images/*.jpg  and  train/labels/*.txt
+  └── valid/images/*.jpg  and  valid/labels/*.txt
+
+This script collects all .txt label files from every split and writes them
+to data/broadcast_eval/labels/, replacing the pre-labels from build_eval_set.py.
 
 After running this, score with:
   .venv/bin/python -m src.validate_seg \\
@@ -15,7 +19,6 @@ After running this, score with:
 
 from __future__ import annotations
 
-import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -24,6 +27,11 @@ from src.config import ROOT
 
 EVAL_ROOT = ROOT / "data" / "broadcast_eval"
 
+# Roboflow YOLOv8 export puts labels under <split>/labels/*.txt
+# Collect from all splits so train/valid/test are all captured.
+_LABEL_MARKERS = ("labels/",)
+_SKIP = ("data.yaml", "README")
+
 
 def import_labels(zip_path: Path, eval_root: Path = EVAL_ROOT) -> None:
     lbl_dir = eval_root / "labels"
@@ -31,12 +39,23 @@ def import_labels(zip_path: Path, eval_root: Path = EVAL_ROOT) -> None:
 
     imported = 0
     with zipfile.ZipFile(zip_path) as zf:
-        txt_members = [m for m in zf.namelist() if m.endswith(".txt") and "obj_train_data" in m]
+        txt_members = [
+            m for m in zf.namelist()
+            if m.endswith(".txt")
+            and any(marker in m for marker in _LABEL_MARKERS)
+            and not any(s in m for s in _SKIP)
+        ]
         if not txt_members:
-            # Try flat structure (some CVAT versions)
-            txt_members = [m for m in zf.namelist() if m.endswith(".txt") and "obj." not in m and "train" not in m]
+            # Fallback: any .txt that isn't a manifest
+            txt_members = [
+                m for m in zf.namelist()
+                if m.endswith(".txt") and not any(s in m for s in _SKIP)
+            ]
         if not txt_members:
-            raise RuntimeError(f"No label .txt files found in {zip_path}. Members: {zf.namelist()[:10]}")
+            raise RuntimeError(
+                f"No label .txt files found in {zip_path}.\n"
+                f"Members: {zf.namelist()[:15]}"
+            )
 
         for member in txt_members:
             stem = Path(member).stem

@@ -1,39 +1,37 @@
-"""Package data/broadcast_eval into a zip CVAT can import directly.
+"""Package data/broadcast_eval into a zip Roboflow can import directly.
 
-CVAT YOLO 1.1 import format:
-  upload_for_cvat.zip
-  ├── obj.data          (metadata)
-  ├── obj.names         (class names)
-  ├── train.txt         (image paths)
-  └── obj_train_data/
-      ├── frame_000.jpg
-      ├── frame_000.txt  (YOLO boxes: class cx cy w h, normalised)
+Roboflow YOLO upload format (simplest path):
+  broadcast_eval_roboflow.zip
+  ├── images/
+  │   ├── frame_000.jpg
+  │   └── ...
+  └── labels/
+      ├── frame_000.txt   (YOLO: class cx cy w h, normalised)
       └── ...
 
 Usage:
   python scripts/package_for_cvat.py
-  -> writes data/broadcast_eval_cvat.zip
+  -> writes data/broadcast_eval_roboflow.zip
 
-Then on app.cvat.ai:
-  1. Create project "football-broadcast-eval", label "Player" (type: rectangle)
-  2. Create task -> upload images from obj_train_data/ only
-     (or upload the whole zip via "YOLO 1.1" import which pre-loads boxes)
-  3. Correct the pre-labels (add missed players, remove FPs, fix bad boxes)
-  4. Export task -> "YOLO 1.1" format -> download zip
-  5. Run: python scripts/import_cvat_labels.py <downloaded.zip>
+Then on app.roboflow.com:
+  1. Create project: Object Detection, "football-broadcast-eval"
+  2. Upload -> drag-drop broadcast_eval_roboflow.zip
+     Roboflow auto-detects YOLO format and pre-loads box annotations.
+  3. Correct pre-labels: add missed players, delete FPs, tighten loose boxes
+  4. Generate dataset version (no augmentation needed for eval set)
+  5. Export -> Format: YOLOv8 -> download zip
+  6. Run: python scripts/import_cvat_labels.py <downloaded_zip>
 """
 
 from __future__ import annotations
 
-import shutil
 import zipfile
 from pathlib import Path
 
 from src.config import ROOT
 
 EVAL_ROOT = ROOT / "data" / "broadcast_eval"
-OUT_ZIP = ROOT / "data" / "broadcast_eval_cvat.zip"
-CLASS_NAMES = ["Player"]
+OUT_ZIP = ROOT / "data" / "broadcast_eval_roboflow.zip"
 
 
 def package(eval_root: Path = EVAL_ROOT, out_zip: Path = OUT_ZIP) -> None:
@@ -47,47 +45,23 @@ def package(eval_root: Path = EVAL_ROOT, out_zip: Path = OUT_ZIP) -> None:
         raise RuntimeError(f"No images found in {img_dir}")
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        # obj.names
-        zf.writestr("obj.names", "\n".join(CLASS_NAMES) + "\n")
-
-        # obj.data
-        zf.writestr(
-            "obj.data",
-            f"classes = {len(CLASS_NAMES)}\n"
-            f"train = data/train.txt\n"
-            f"names = data/obj.names\n"
-            f"backup = backup/\n",
-        )
-
-        # train.txt and images+labels in obj_train_data/
-        train_lines = []
         for img_path in images:
-            name = img_path.name
-            stem = img_path.stem
-            arc_img = f"obj_train_data/{name}"
-            arc_lbl = f"obj_train_data/{stem}.txt"
-
-            zf.write(img_path, arc_img)
-            train_lines.append(f"data/{arc_img}")
-
-            lbl_path = lbl_dir / f"{stem}.txt"
+            zf.write(img_path, f"images/{img_path.name}")
+            lbl_path = lbl_dir / f"{img_path.stem}.txt"
             if lbl_path.exists():
-                zf.write(lbl_path, arc_lbl)
+                zf.write(lbl_path, f"labels/{lbl_path.name}")
             else:
-                zf.writestr(arc_lbl, "")  # empty = no detections on this frame
-
-        zf.writestr("train.txt", "\n".join(train_lines) + "\n")
+                zf.writestr(f"labels/{img_path.stem}.txt", "")
 
     print(f"Wrote {len(images)} frames to {out_zip} ({out_zip.stat().st_size // 1024} KB)")
     print()
     print("Next steps:")
-    print("  1. Go to https://app.cvat.ai")
-    print("  2. Create project: 'football-broadcast-eval'")
-    print("     Label: 'Player' (rectangle)")
-    print(f"  3. Create task -> 'Import data' -> upload {out_zip.name}")
-    print("     Format: YOLO 1.1 (pre-loads the model's box predictions as annotations)")
-    print("  4. Open task, correct boxes: add missed players, delete FPs, tighten loose boxes")
-    print("  5. Export annotations -> Format: YOLO 1.1 -> download zip")
+    print("  1. Go to https://app.roboflow.com")
+    print("  2. New project -> Object Detection -> 'football-broadcast-eval'")
+    print(f"  3. Upload -> drag-drop {out_zip.name}")
+    print("     Roboflow detects YOLO format and pre-loads box annotations.")
+    print("  4. Correct boxes: add missed players, delete FPs, tighten loose boxes")
+    print("  5. Versions -> Generate -> Export -> YOLOv8 -> download zip")
     print("  6. Run: python scripts/import_cvat_labels.py <downloaded_zip>")
 
 
