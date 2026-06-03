@@ -34,7 +34,7 @@ MIN_UPPER_MASK_PIXELS = 50
 MODEL_PATH = ROOT / "football_tracker" / "run_v1" / "weights" / "best.pt"
 
 # Segmentation model (primary)
-SEG_MODEL_PATH = ROOT / "football_tracker_seg" / "run_v3-3" / "weights" / "best.pt"
+SEG_MODEL_PATH = ROOT / "football_tracker_seg" / "run_v3-4_hardneg" / "weights" / "best.pt"
 SEG_BBOX_SOURCE_ROOT = ROOT / "merged_football_dataset_v2"
 SEG_DATASET_ROOT = ROOT / "merged_football_dataset_v2_seg"
 SEG_DATASET_YAML = SEG_DATASET_ROOT / "data.yaml"
