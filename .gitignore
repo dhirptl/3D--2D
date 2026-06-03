@@ -22,6 +22,7 @@ data/broadcast_eval/images/
 data/broadcast_eval/labels/
 data/broadcast_eval_cvat.zip
 data/broadcast_eval_roboflow.zip
+data/fv2_clean/
 
 # Datasets (Roboflow export — see README.roboflow.txt)
 football_dataset/
