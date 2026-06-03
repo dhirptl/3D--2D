@@ -162,6 +162,7 @@ Notes:
 
 | Constant | Default | Effect |
 |----------|---------|--------|
+| `PLAYER_PREDICT_CONF` | 0.40 | YOLO player confidence (raise reduces sideline ghosts; lower with `--player-conf` if coverage drops) |
 | `QUALITY_FRAMES` | 50 | Warmup vectors before calibration |
 | `WARMUP_MIN_UNIQUE_TRACKS` | 12 | Distinct track IDs required |
 | `WARMUP_MAX_PER_TRACK` | 3 | Cap samples per track |
