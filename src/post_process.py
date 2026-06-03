@@ -62,17 +62,17 @@ def _hud_limits(frame_shape, field_mask: np.ndarray | None = None) -> tuple[floa
 def filter_hud_detections(frame_shape, xyxy, confs, track_ids, *, field_mask: np.ndarray | None = None):
     if len(xyxy) == 0:
         empty = np.array([], dtype=int)
-        return np.empty((0, 4)), np.array([]), empty
+        return np.empty((0, 4)), np.array([]), empty, empty
 
     top_limit, bottom_limit = _hud_limits(frame_shape, field_mask=field_mask)
     cy = (xyxy[:, 1] + xyxy[:, 3]) / 2
     keep = (cy > top_limit) & (cy < bottom_limit)
     if not np.any(keep):
         empty = np.array([], dtype=int)
-        return np.empty((0, 4)), np.array([]), empty
+        return np.empty((0, 4)), np.array([]), empty, empty
     idx = np.where(keep)[0]
     tids = track_ids[idx] if track_ids is not None and len(track_ids) else None
-    return xyxy[idx], confs[idx], tids
+    return xyxy[idx], confs[idx], tids, idx
 
 
 def suppress_duplicate_tracks(

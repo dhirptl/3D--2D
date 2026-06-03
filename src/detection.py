@@ -23,7 +23,6 @@ from src.mask_utils import (
     crop_mask_to_bbox,
     get_instance_mask_full,
     mask_area,
-    match_indices,
 )
 from src.post_process import _hud_limits, filter_hud_detections
 
@@ -143,10 +142,11 @@ def extract_tracked_detections(
         logger.warning("frame %d: boxes present but masks is None; using bbox fallback", frame_idx)
 
     xyxy = orig_xyxy
+    hud_idx = np.arange(len(orig_xyxy))
     if apply_hud_filter:
         n_before_hud = len(xyxy)
         pre_hud_xyxy = orig_xyxy
-        xyxy, confs, track_ids = filter_hud_detections(
+        xyxy, confs, track_ids, hud_idx = filter_hud_detections(
             frame.shape, xyxy, confs, track_ids, field_mask=field_mask
         )
         if len(xyxy) == 0:
@@ -163,7 +163,7 @@ def extract_tracked_detections(
                 stats.record(0)
             return []
 
-    keep_idx = match_indices(xyxy, orig_xyxy) if not masks_missing else list(range(len(xyxy)))
+    keep_idx = hud_idx
 
     detections = []
     for i, k in enumerate(keep_idx):

@@ -43,7 +43,6 @@ from src.mask_utils import (
     get_instance_mask_full,
     iou_matrix_xyxy,
     mask_area,
-    match_indices,
 )
 from src.pipeline import VideoPipelineContext
 from src.post_process import filter_hud_detections
@@ -242,14 +241,6 @@ def test_erode_mask():
     assert mask_area(e) < mask_area(m)
 
 
-def test_iou_match_unique():
-    filtered = np.array([[0, 0, 10, 10], [20, 20, 30, 30]], dtype=float)
-    orig = np.array([[0, 0, 10, 10], [20, 20, 30, 30], [5, 5, 15, 15]], dtype=float)
-    idx = match_indices(filtered, orig)
-    assert len(idx) == 2
-    assert len(set(idx)) == 2
-
-
 def test_iou_matrix_broadcast():
     a = np.array([[0, 0, 10, 10], [20, 20, 30, 30]], dtype=float)
     b = np.array([[0, 0, 10, 10], [5, 5, 15, 15]], dtype=float)
@@ -435,7 +426,7 @@ def test_adaptive_hud_filter_uses_field_mask():
     tids = np.array([1, 2, 3], dtype=int)
     field_mask = np.zeros((100, 20), dtype=np.uint8)
     field_mask[40:60, :] = 255
-    kept_xyxy, kept_confs, kept_ids = filter_hud_detections(
+    kept_xyxy, kept_confs, kept_ids, kept_idx = filter_hud_detections(
         (100, 20, 3),
         xyxy,
         confs,

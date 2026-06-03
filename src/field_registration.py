@@ -28,6 +28,7 @@ from src.config import (
 _TEMPLATE_W = FIELD_REG_TEMPLATE_W
 _TEMPLATE_H = FIELD_REG_TEMPLATE_H
 _HOUGH_MAX_W = 640  # downsample width before Canny+Hough for speed
+_YARD_LINE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
 
 
 def _yard_line_mask(frame: np.ndarray, hsv: np.ndarray | None = None) -> np.ndarray:
@@ -36,8 +37,7 @@ def _yard_line_mask(frame: np.ndarray, hsv: np.ndarray | None = None) -> np.ndar
     line_lower = np.array([0, 0, YARD_LINE_VAL_MIN])
     line_upper = np.array([179, YARD_LINE_SAT_MAX, 255])
     lines = cv2.inRange(hsv, line_lower, line_upper)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    return cv2.morphologyEx(lines, cv2.MORPH_CLOSE, kernel)
+    return cv2.morphologyEx(lines, cv2.MORPH_CLOSE, _YARD_LINE_KERNEL)
 
 
 def _detect_line_segments(
