@@ -195,6 +195,7 @@ def eval_clip(
     debug_filters: bool = False,
     tracker: str = "bytetrack",
     zerodet_jsonl: Path | None = None,
+    player_device: str | None = None,
 ) -> dict:
     zerodet_path = zerodet_jsonl
     if zerodet_path is not None:
@@ -231,6 +232,7 @@ def eval_clip(
         use_helmet_gate=use_helmet_gate,
         helmet_gate_grace=max(0, helmet_gate_grace),
         debug_filters=debug_filters,
+        player_device=player_device,
     )
 
     calibration_loaded = False
@@ -399,6 +401,11 @@ def main() -> None:
     )
     parser.add_argument("--debug-filters", action="store_true")
     parser.add_argument(
+        "--device",
+        default=None,
+        help='Inference device: "auto" (default: MPS > CUDA > CPU), "cpu", "mps", "cuda"',
+    )
+    parser.add_argument(
         "--tracker",
         choices=("botsort", "bytetrack"),
         default="bytetrack",
@@ -455,6 +462,7 @@ def main() -> None:
         debug_filters=args.debug_filters,
         tracker=args.tracker,
         zerodet_jsonl=zerodet_path,
+        player_device=args.device,
     )
 
     print("--- Clip Evaluation ---")

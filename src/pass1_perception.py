@@ -59,6 +59,7 @@ def run_pass1(
     player_imgsz: int = PLAYER_IMGSZ,
     player_max_det: int = PLAYER_PREDICT_MAX_DET,
     helmet_model: Path | None = None,
+    player_device: str | None = None,
 ) -> Path:
     if not source.exists():
         raise FileNotFoundError(source)
@@ -106,6 +107,7 @@ def run_pass1(
             player_iou=player_iou,
             player_imgsz=player_imgsz,
             player_max_det=player_max_det,
+            player_device=player_device,
             field_mask=field_mask,
         )
         detections = suppress_duplicate_tracks(detections)

@@ -11,6 +11,7 @@ from ultralytics import YOLO
 
 from src.config import (
     PLAYER_CLASS_ID,
+    PLAYER_DEVICE,
     PLAYER_IMGSZ,
     PLAYER_PREDICT_CONF,
     PLAYER_PREDICT_HALF,
@@ -27,6 +28,17 @@ from src.mask_utils import (
 from src.post_process import _hud_limits, filter_hud_detections
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_device(device: str | None) -> str:
+    if device and device != "auto":
+        return device
+    import torch
+    if torch.backends.mps.is_available():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
 # Zero-detection decomposition: env-gated, zero-cost in production. Set ZERODET_DEBUG to a
 # path to log which path produced each zero-det frame (ID_NONE vs HUD_ATE_ALL), then feed the
@@ -86,6 +98,7 @@ def extract_tracked_detections(
     player_imgsz: int | None = None,
     player_max_det: int | None = None,
     player_half: bool | None = None,
+    player_device: str | None = None,
     field_mask: np.ndarray | None = None,
 ) -> list[dict]:
     if not run_inference:
@@ -98,6 +111,7 @@ def extract_tracked_detections(
     imgsz = PLAYER_IMGSZ if player_imgsz is None else player_imgsz
     max_det = PLAYER_PREDICT_MAX_DET if player_max_det is None else player_max_det
     half = PLAYER_PREDICT_HALF if player_half is None else player_half
+    device = resolve_device(PLAYER_DEVICE if player_device is None else player_device)
     try:
         results = model.track(
             frame,
@@ -110,6 +124,7 @@ def extract_tracked_detections(
             persist=True,
             retina_masks=retina_masks,
             half=half,
+            device=device,
             verbose=False,
         )
     except Exception as e:

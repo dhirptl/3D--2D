@@ -207,6 +207,9 @@ DUPLICATE_SUPPRESS_IOU = 0.70
 # Half-precision inference (FP16). Significant speedup on CUDA; variable on MPS.
 PLAYER_PREDICT_HALF = False
 
+# Inference device: "auto" resolves to MPS > CUDA > CPU at runtime.
+PLAYER_DEVICE: str = "auto"
+
 # Inference
 DETECT_EVERY_DEFAULT = 1
 KMEANS_N_INIT = 10

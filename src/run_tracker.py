@@ -101,6 +101,7 @@ def run(
     player_imgsz: int = PLAYER_IMGSZ,
     player_max_det: int = PLAYER_PREDICT_MAX_DET,
     player_half: bool = PLAYER_PREDICT_HALF,
+    player_device: str | None = None,
     offline_pass2: bool = False,
     offline_out_dir: str | None = None,
     homography_json: str | None = None,
@@ -183,6 +184,7 @@ def run(
         player_imgsz=max(64, int(player_imgsz)),
         player_max_det=max(1, int(player_max_det)),
         player_half=player_half,
+        player_device=player_device,
         pose_every=max(1, pose_every),
         use_pose=not no_pose,
         require_helmet=require_helmet,
@@ -442,6 +444,11 @@ def main() -> None:
         help="Use FP16 half-precision inference (large speedup on CUDA; variable on MPS)",
     )
     parser.add_argument(
+        "--device",
+        default=None,
+        help='Inference device: "auto" (default: MPS > CUDA > CPU), "cpu", "mps", "cuda"',
+    )
+    parser.add_argument(
         "--pose-every",
         type=int,
         default=POSE_EVERY_DEFAULT,
@@ -567,6 +574,7 @@ def main() -> None:
         player_imgsz=args.player_imgsz,
         player_max_det=args.player_max_det,
         player_half=args.half,
+        player_device=args.device,
         offline_pass2=args.offline_pass2,
         offline_out_dir=args.offline_out_dir,
         homography_json=args.homography_json,

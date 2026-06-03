@@ -12,6 +12,7 @@ from src.config import (
     CAMERA_CUT_CONSECUTIVE_FRAMES,
     CAMERA_CUT_MAD_THRESHOLD,
     FIELD_FOOT_MIN_FRAC,
+    PLAYER_DEVICE,
     PLAYER_PREDICT_HALF,
     FIELD_HSV_AUTO_FRAMES,
     FIELD_HSV_BLEND_ALPHA,
@@ -61,6 +62,7 @@ class VideoPipelineContext:
     player_imgsz: int = PLAYER_IMGSZ
     player_max_det: int = PLAYER_PREDICT_MAX_DET
     player_half: bool = PLAYER_PREDICT_HALF
+    player_device: str | None = None
     pose_every: int = POSE_EVERY_DEFAULT
     use_pose: bool = True
     require_helmet: bool = True
@@ -400,6 +402,7 @@ def process_video_frame(
             player_imgsz=ctx.player_imgsz,
             player_max_det=ctx.player_max_det,
             player_half=ctx.player_half,
+            player_device=ctx.player_device,
             field_mask=field_mask,
         )
         detections = suppress_duplicate_tracks(detections)
