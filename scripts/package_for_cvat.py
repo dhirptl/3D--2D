@@ -45,6 +45,7 @@ def package(eval_root: Path = EVAL_ROOT, out_zip: Path = OUT_ZIP) -> None:
         raise RuntimeError(f"No images found in {img_dir}")
 
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("classes.txt", "Player\n")
         for img_path in images:
             zf.write(img_path, f"images/{img_path.name}")
             lbl_path = lbl_dir / f"{img_path.stem}.txt"
