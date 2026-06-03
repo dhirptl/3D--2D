@@ -12,8 +12,10 @@ import numpy as np
 from ultralytics import YOLO
 
 from src.config import (
+    BOTSORT_CFG,
     BYTETRACK_CFG,
     CALIBRATION_VERSION,
+    DEBUG_CROP_DIR,
     DETECT_EVERY_DEFAULT,
     HELMET_CONF,
     HELMET_EVERY_DEFAULT,
@@ -31,12 +33,12 @@ from src.config import (
     RETINA_MAX_MS_PER_FRAME,
     ROOT as CONFIG_ROOT,
     SEG_MODEL_PATH,
-    TRACKER_CFG,
 )
 from src.detection import DetectionStats, extract_tracked_detections
 from src.draw import draw_teams
 from src.mask_utils import mask_area
 from src.pass1_perception import run_pass1
+from src.pass1_quality_gate import evaluate_ir
 from src.pass2_analysis import run_pass2
 from src.pipeline import VideoPipelineContext, process_video_frame
 from src.team_classifier import FootballTeamClassifier
@@ -85,7 +87,7 @@ def run(
     hue_weight: float | None = None,
     force_retina: bool = False,
     no_prefetch: bool = False,
-    tracker: str = "botsort",
+    tracker: str = "bytetrack",
     pose_every: int = POSE_EVERY_DEFAULT,
     no_pose: bool = False,
     require_helmet: bool = True,
@@ -103,6 +105,10 @@ def run(
     offline_out_dir: str | None = None,
     homography_json: str | None = None,
     annotations_csv: str | None = None,
+    no_pass1_gate: bool = False,
+    save_kmeans_crops: bool = False,
+    debug_crops_dir: str | None = None,
+    debug_crops_max_frames: int | None = None,
 ) -> None:
     if offline_pass2:
         out_dir = Path(offline_out_dir) if offline_out_dir else (CONFIG_ROOT / "outputs" / "pass2")
@@ -118,10 +124,18 @@ def run(
             player_max_det=player_max_det,
             helmet_model=helmet_model_path if require_helmet else None,
         )
+        gate_result = evaluate_ir(ir_path)
+        print(f"Pass1 quality gate: {gate_result}")
+        if not gate_result["pass"] and not no_pass1_gate:
+            raise RuntimeError(
+                f"Pass1 quality gate failed: {gate_result.get('reason') or gate_result.get('checks')}. "
+                "Use --no-pass1-gate to skip."
+            )
         metrics = run_pass2(
             ir_path,
             out_dir,
             homography_json=Path(homography_json) if homography_json else None,
+            source_clip=Path(source),
             annotations_csv=Path(annotations_csv) if annotations_csv else None,
         )
         print(f"Offline Pass2 complete. Metrics: {metrics}")
@@ -141,10 +155,21 @@ def run(
         )
 
     model = YOLO(str(weights))
+    debug_dir: Path | None = None
+    if save_kmeans_crops and use_team:
+        debug_dir = Path(debug_crops_dir) if debug_crops_dir else DEBUG_CROP_DIR
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[debug] saving KMeans feature crops to {debug_dir}")
     classifier = (
-        FootballTeamClassifier(hue_weight=hue_weight) if use_team else None
+        FootballTeamClassifier(
+            hue_weight=hue_weight,
+            debug_crop_dir=debug_dir,
+            debug_crops_max_frames=debug_crops_max_frames,
+        )
+        if use_team
+        else None
     )
-    tracker_path = TRACKER_CFG if tracker == "botsort" else BYTETRACK_CFG
+    tracker_path = BOTSORT_CFG if tracker == "botsort" else BYTETRACK_CFG
     ctx = VideoPipelineContext(
         model=model,
         classifier=classifier,
@@ -383,8 +408,8 @@ def main() -> None:
     parser.add_argument(
         "--tracker",
         choices=("botsort", "bytetrack"),
-        default="botsort",
-        help="Tracker config (default: botsort with Re-ID)",
+        default="bytetrack",
+        help="Tracker config (default: bytetrack)",
     )
     parser.add_argument(
         "--player-conf",
@@ -490,6 +515,22 @@ def main() -> None:
         action="store_true",
         help="Skip the Pass1 quality gate (allows experimental runs to proceed to Pass2)",
     )
+    parser.add_argument(
+        "--save-kmeans-crops",
+        action="store_true",
+        help="Dump torso-masked BGR tiles fed into KMeans feature extraction",
+    )
+    parser.add_argument(
+        "--debug-crops-dir",
+        default=None,
+        help="Output directory for --save-kmeans-crops (default: outputs/debug_crops)",
+    )
+    parser.add_argument(
+        "--debug-crops-max-frames",
+        type=int,
+        default=None,
+        help="Stop saving debug crops after this frame index (default: unlimited)",
+    )
     args = parser.parse_args()
 
     run(
@@ -530,6 +571,10 @@ def main() -> None:
         offline_out_dir=args.offline_out_dir,
         homography_json=args.homography_json,
         annotations_csv=args.annotations_csv,
+        no_pass1_gate=args.no_pass1_gate,
+        save_kmeans_crops=args.save_kmeans_crops,
+        debug_crops_dir=args.debug_crops_dir,
+        debug_crops_max_frames=args.debug_crops_max_frames,
     )
 
 

@@ -10,6 +10,7 @@ from src.config import (
     FIELD_HSV_VAL_LOW,
     FIELD_REG_MAX_REPROJ_ERR,
     FIELD_REG_MIN_INLIERS,
+    FIELD_REG_MIN_PROJ_AREA_FRAC,
     FIELD_REG_TEMPLATE_H,
     FIELD_REG_TEMPLATE_W,
     FIELD_REG_VALID_STREAK,
@@ -169,6 +170,34 @@ def _field_template_polygon() -> np.ndarray:
     ], dtype=np.float32)
 
 
+def _shoelace_area(poly: np.ndarray) -> float:
+    x = poly[:, 0]
+    y = poly[:, 1]
+    return float(0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def _projection_area_frac(H: np.ndarray, h: int, w: int) -> float | None:
+    """Projected field-template area as a fraction of frame area (same path as playable_mask)."""
+    if H is None or H.shape != (3, 3) or h <= 0 or w <= 0:
+        return None
+    try:
+        H_inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        return None
+    poly_t = _field_template_polygon()
+    poly_f = cv2.perspectiveTransform(poly_t.reshape(-1, 1, 2), H_inv).reshape(-1, 2)
+    area = _shoelace_area(poly_f)
+    if not np.isfinite(area) or area <= 0:
+        return None
+    frac = area / float(h * w)
+    return float(frac) if np.isfinite(frac) else None
+
+
+def _projection_is_plausible(H: np.ndarray, h: int, w: int) -> bool:
+    frac = _projection_area_frac(H, h, w)
+    return frac is not None and frac >= FIELD_REG_MIN_PROJ_AREA_FRAC
+
+
 class FieldRegistration:
     """Per-video homography from broadcast frame to field template."""
 
@@ -259,6 +288,10 @@ class FieldRegistration:
         mean_err = float(err[inliers].mean()) if inliers.any() else float(err.mean())
 
         if int(inliers.sum()) < FIELD_REG_MIN_INLIERS or mean_err > FIELD_REG_MAX_REPROJ_ERR:
+            self._invalidate_streak()
+            return False
+
+        if not _projection_is_plausible(H, fh, fw):
             self._invalidate_streak()
             return False
 

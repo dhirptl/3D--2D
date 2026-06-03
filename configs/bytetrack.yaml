@@ -1,8 +1,8 @@
-# ByteTrack config for Ultralytics — tuned for broadcast camera pans (TDD §6)
+# ByteTrack config for Ultralytics — Phase 2 tuned (broadcast football)
 tracker_type: bytetrack
 track_high_thresh: 0.25
-track_low_thresh: 0.1
+track_low_thresh: 0.08
 new_track_thresh: 0.25
-track_buffer: 60
-match_thresh: 0.8
+track_buffer: 90
+match_thresh: 0.65
 fuse_score: true

@@ -185,6 +185,20 @@ def test_build_raw_lab4d_vector_stale_mask():
     assert build_raw_lab4d_vector(frame, mask, (10, 15, 50, 75), det=det) is None
 
 
+def test_build_raw_lab4d_vector_debug_crop():
+    frame = np.zeros((80, 60, 3), dtype=np.uint8)
+    frame[20:70, 15:45, 2] = 200
+    frame[20:70, 15:45, 0] = 10
+    mask = np.zeros((80, 60), dtype=np.uint8)
+    mask[20:70, 15:45] = 255
+    out = build_raw_lab4d_vector(frame, mask, (10, 15, 50, 75), return_debug_crop=True)
+    assert out is not None
+    vec, crop = out
+    assert vec.shape == (6,)
+    assert crop.ndim == 3 and crop.shape[2] == 3
+    assert int(crop.sum()) > 0
+
+
 def test_torso_mask_from_keypoints():
     crop = np.zeros((100, 60), dtype=np.uint8)
     crop[10:90, 10:50] = 255
@@ -1052,6 +1066,7 @@ if __name__ == "__main__":
     test_preprocess_lab_clahe_preserves_ab()
     test_build_raw_lab4d_vector_small_mask()
     test_build_raw_lab4d_vector_valid()
+    test_build_raw_lab4d_vector_debug_crop()
     test_build_raw_lab4d_vector_stale_mask()
     test_torso_mask_from_keypoints()
     test_mask_area()

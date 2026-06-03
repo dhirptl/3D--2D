@@ -175,6 +175,13 @@ def _circular_hue_stats(hue: np.ndarray) -> tuple[float, float]:
     return mean_h, std_h
 
 
+def _torso_sample_bgr(player_bgr: np.ndarray, torso: np.ndarray) -> np.ndarray:
+    """BGR tile with only torso-mask pixels visible (pre-CLAHE sampling region)."""
+    out = np.zeros_like(player_bgr)
+    out[torso > 0] = player_bgr[torso > 0]
+    return out
+
+
 def extract_lab_ab_hue_stats(
     lab_image: np.ndarray, hsv_image: np.ndarray, band_mask: np.ndarray
 ) -> np.ndarray | None:
@@ -199,7 +206,8 @@ def build_raw_lab4d_vector(
     field_mask: np.ndarray | None = None,
     det: dict | None = None,
     keypoints: np.ndarray | None = None,
-) -> np.ndarray | None:
+    return_debug_crop: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray] | None:
     """
     Color pipeline: isolate -> turf subtract (green safeguard) -> torso -> LAB L CLAHE -> 4D AB.
     """
@@ -244,11 +252,14 @@ def build_raw_lab4d_vector(
     if mask_area(torso) < MIN_UPPER_MASK_PIXELS:
         return None
 
+    debug_crop = _torso_sample_bgr(player_bgr, torso) if return_debug_crop else None
     lab_crop = preprocess_lab_clahe(player_bgr)
     hsv_crop = cv2.cvtColor(player_bgr, cv2.COLOR_BGR2HSV)
     vec = extract_lab_ab_hue_stats(lab_crop, hsv_crop, torso)
     if vec is not None and det is not None:
         det["_turf_sub_skipped"] = turf_skipped
+    if return_debug_crop:
+        return (vec, debug_crop) if vec is not None else None
     return vec
 
 

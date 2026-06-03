@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # --- Detection / tracking ---
 PLAYER_CLASS_ID = 0
 PLAYER_IMGSZ = 1280
-PLAYER_PREDICT_CONF = 0.18
+PLAYER_PREDICT_CONF = 0.40
 PLAYER_PREDICT_IOU = 0.45
 PLAYER_PREDICT_MAX_DET = 100
 
@@ -128,6 +128,7 @@ FIELD_REG_TEMPLATE_W = 1200
 FIELD_REG_TEMPLATE_H = 533
 FIELD_REG_UPDATE_STRIDE_STABLE = 15  # frames to skip per Hough+RANSAC when locked
 FIELD_REG_STABLE_STREAK = 5          # valid_streak depth considered stable
+FIELD_REG_MIN_PROJ_AREA_FRAC = 0.08  # reject collapsed template projection (gap 0.05–0.12 on 1minclip)
 
 # Shared field ROI fractions (calibration, rolling update, green fraction)
 FIELD_ROI_Y0_FRAC = 0.35
@@ -159,9 +160,13 @@ HELMET_GATE_GRACE = 15
 HELMET_GATE_SOFT_LOCK_STREAK = 7
 HELMET_GATE_LOCKED_REQUIRED = 1
 
-# Tracker (default BoT-SORT + Re-ID)
-TRACKER_CFG = ROOT / "configs" / "botsort.yaml"
+# Tracker (default ByteTrack; BoT-SORT available via --tracker botsort)
+BOTSORT_CFG = ROOT / "configs" / "botsort.yaml"
 BYTETRACK_CFG = ROOT / "configs" / "bytetrack.yaml"
+TRACKER_CFG = BYTETRACK_CFG
+
+# Feature debug crop dump (run_tracker --save-kmeans-crops)
+DEBUG_CROP_DIR = ROOT / "outputs" / "debug_crops"
 
 # Warmup timeout & progressive relaxation
 WARMUP_FRAME_TIMEOUT = 1500
@@ -205,6 +210,10 @@ PLAYER_PREDICT_HALF = False
 DETECT_EVERY_DEFAULT = 1
 KMEANS_N_INIT = 10
 KMEANS_RANDOM_STATE = 42
+
+# Offline team assignment: re-cluster per camera segment only if luminance differs
+OFFLINE_BRIGHTNESS_SPLIT_DELTA = 15.0  # gray mean 0-255 across cut segments
+OFFLINE_BRIGHTNESS_LUMINANCE_STRIDE = 30  # sample every N frames per segment
 FIELD_HSV_MAX_PIXELS = 50_000
 WARMUP_VECTOR_CAP = QUALITY_FRAMES * 2
 PIPELINE_THREADS_DEFAULT = 4

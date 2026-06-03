@@ -1,6 +1,7 @@
 """Team classification: WARMUP -> CALIBRATING -> LOCKED (LAB 4D + k=2)."""
 
 from collections import Counter, defaultdict, deque
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -303,8 +304,16 @@ class FootballTeamClassifier:
     STATE_CALIBRATING = "CALIBRATING"
     STATE_LOCKED = "LOCKED"
 
-    def __init__(self, *, hue_weight: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        hue_weight: float | None = None,
+        debug_crop_dir: Path | None = None,
+        debug_crops_max_frames: int | None = None,
+    ) -> None:
         del hue_weight  # legacy CLI arg; LAB features do not use W_H
+        self.debug_crop_dir = debug_crop_dir
+        self.debug_crops_max_frames = debug_crops_max_frames
         self.state = self.STATE_WARMUP
         self.warmup_vectors: list[np.ndarray] = []
         self.warmup_scores: list[float] = []
@@ -336,6 +345,17 @@ class FootballTeamClassifier:
         self.rejection_log: dict[str, int] = defaultdict(int)
         self.frame_idx = 0
         self.post_cut_frames = 0
+
+    def _save_debug_crop(self, track_id: int, label: int, crop: np.ndarray) -> None:
+        if self.debug_crop_dir is None:
+            return
+        if (
+            self.debug_crops_max_frames is not None
+            and self.frame_idx >= self.debug_crops_max_frames
+        ):
+            return
+        fname = f"{self.frame_idx:06d}_id{track_id}_team{label}_state{self.state}.jpg"
+        cv2.imwrite(str(self.debug_crop_dir / fname), crop)
 
     def load_calibration(self, data: dict) -> None:
         saved_version = data.get("feature_version", "unknown")
@@ -412,15 +432,26 @@ class FootballTeamClassifier:
             mask = det["mask"]
             bbox = det["bbox"]
             conf = det["conf"]
+            debug_crop: np.ndarray | None = None
+            want_crop = self.debug_crop_dir is not None
 
-            raw_feat = build_raw_lab4d_vector(
+            feat_out = build_raw_lab4d_vector(
                 frame_bgr,
                 mask,
                 bbox,
                 field_mask=self.field_mask,
                 det=det,
                 keypoints=det.get("keypoints"),
+                return_debug_crop=want_crop,
             )
+            if want_crop:
+                if feat_out is None:
+                    raw_feat = None
+                else:
+                    raw_feat, debug_crop = feat_out
+            else:
+                raw_feat = feat_out
+
             if raw_feat is None:
                 results[track_id] = -1
                 self.last_frame_debug[track_id] = {"reject": "features"}
@@ -447,6 +478,8 @@ class FootballTeamClassifier:
                 dist_margin=dist_margin,
             ):
                 results[track_id] = -2
+                if debug_crop is not None:
+                    self._save_debug_crop(track_id, -2, debug_crop)
                 continue
 
             if self.state == self.STATE_WARMUP:
@@ -465,6 +498,9 @@ class FootballTeamClassifier:
                     bbox,
                     all_bboxes,
                 )
+
+            if debug_crop is not None:
+                self._save_debug_crop(track_id, results[track_id], debug_crop)
 
         if self.post_cut_frames > 0:
             self.post_cut_frames -= 1
