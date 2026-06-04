@@ -1,7 +1,7 @@
 """Fine-tune the segmentation model with new Football Videos-2 data.
 
 Steps:
-  1. Generate SAM polygon masks for data/fv2_clean/train (508 images)
+  1. Merge data/fv2_clean into merged_football_dataset_v2_seg (poly copy + bbox→rect)
   2. Fine-tune from run_v3-4_hardneg weights on the expanded dataset
   3. Save new run to football_tracker_seg/run_v3-5_fv2/
 
@@ -32,31 +32,21 @@ RUN_NAME = "run_v3-5_fv2"
 PROJECT = ROOT / "football_tracker_seg"
 
 
-def run_sam_generation() -> None:
-    """Generate SAM polygon masks for the 508 clean FV2 images."""
+def run_fv2_merge() -> None:
+    """Merge fv2_clean seg/bbox labels into the training dataset."""
     print("=" * 60)
-    print("Step 1: SAM mask generation (~30-60 min on M4)")
+    print("Step 1: Merge FV2 labels into seg dataset")
     print("=" * 60)
-    src = FV2_CLEAN / "train"
-    if not src.exists():
-        print(f"ERROR: {src} not found. Run scripts/dedup_fv2.py first.")
+    if not FV2_CLEAN.exists():
+        print(f"ERROR: {FV2_CLEAN} not found. Run scripts/dedup_fv2.py first.")
         sys.exit(1)
 
-    n_images = len(list((src / "images").glob("*.jpg")))
-    print(f"  Source: {src} ({n_images} images)")
-    print(f"  Output: {SEG_DATASET}")
-
     subprocess.run(
-        [
-            sys.executable, "-m", "src.generate_seg_labels",
-            "--src", str(src),
-            "--out", str(SEG_DATASET),
-            "--resume",  # skip images already processed
-        ],
+        [sys.executable, str(ROOT / "scripts" / "merge_fv2_seg.py")],
         cwd=str(ROOT),
         check=True,
     )
-    print("SAM mask generation complete.")
+    print("FV2 merge complete.")
 
 
 def run_training(dry_run: bool = False) -> None:
@@ -74,7 +64,7 @@ def run_training(dry_run: bool = False) -> None:
         mode="train",
         model=str(BASE_WEIGHTS),        # fine-tune from hardneg
         data=str(SEG_DATASET / "data.yaml"),
-        epochs=30,                       # short fine-tune, not full retrain
+        epochs=15,                       # first-pass fine-tune (508 new images)
         patience=15,
         batch=8,
         imgsz=1024,
@@ -119,13 +109,13 @@ def run_training(dry_run: bool = False) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-sam", action="store_true",
-                        help="Skip SAM mask generation (if already done)")
+                        help="Skip FV2 merge (if already done)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print config only, don't train")
     args = parser.parse_args()
 
     if not args.skip_sam and not args.dry_run:
-        run_sam_generation()
+        run_fv2_merge()
 
     run_training(dry_run=args.dry_run)
 

@@ -100,6 +100,7 @@ def extract_tracked_detections(
     player_half: bool | None = None,
     player_device: str | None = None,
     field_mask: np.ndarray | None = None,
+    hud_band: tuple[float, float] | None = None,
 ) -> list[dict]:
     if not run_inference:
         return []
@@ -162,14 +163,17 @@ def extract_tracked_detections(
         n_before_hud = len(xyxy)
         pre_hud_xyxy = orig_xyxy
         xyxy, confs, track_ids, hud_idx = filter_hud_detections(
-            frame.shape, xyxy, confs, track_ids, field_mask=field_mask
+            frame.shape, xyxy, confs, track_ids, field_mask=field_mask, hud_band=hud_band
         )
         if len(xyxy) == 0:
             fm = "none" if field_mask is None else ("empty" if not field_mask.any() else "valid")
             rec = {"frame": frame_idx, "path": "HUD_ATE_ALL",
                    "raw_boxes": int(n_before_hud), "field_mask": fm}
             if _ZERODET_LOG:  # only compute band diagnostics when logging
-                top_lim, bot_lim = _hud_limits(frame.shape, field_mask=field_mask)
+                if hud_band is not None:
+                    top_lim, bot_lim = hud_band
+                else:
+                    top_lim, bot_lim = _hud_limits(frame.shape, field_mask=field_mask)
                 rec["frame_h"] = int(frame.shape[0])
                 rec["band"] = [round(float(top_lim), 1), round(float(bot_lim), 1)]
                 rec["box_cy"] = [round(float((b[1] + b[3]) / 2), 1) for b in pre_hud_xyxy]

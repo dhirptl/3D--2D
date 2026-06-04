@@ -22,6 +22,7 @@ from src.config import (
     FIELD_REG_STABLE_STREAK,
     FIELD_REG_UPDATE_STRIDE_STABLE,
     FIELD_REG_VALID_STREAK,
+    HUD_BAND_HOLD_FRAMES,
     FIELD_ROI_X0_FRAC,
     FIELD_ROI_X1_FRAC,
     FIELD_ROI_Y0_FRAC,
@@ -43,8 +44,9 @@ from src.field_hsv import build_field_mask_from_bounds, estimate_field_hsv, esti
 from src.field_registration import FieldRegistration, center_roi_green_fraction
 from src.helmet_verify import HelmetTrackGate, detect_helmets, detect_helmets_roi, filter_detections_by_helmet
 from src.pose_estimation import attach_keypoints_to_detections, get_pose_model, run_pose_on_frame
-from src.post_process import build_field_mask, filter_by_field_area, suppress_duplicate_tracks
+from src.post_process import build_field_mask, filter_by_field_area, hold_hud_band_limits, suppress_duplicate_tracks, _hud_limits
 from src.team_classifier import FootballTeamClassifier
+from src.track_reassoc import get_reassociator
 
 
 @dataclass
@@ -96,6 +98,7 @@ class VideoPipelineContext:
     camera_cut_streak: int = 0
     helmet_rejected_total: int = 0
     hud_rejected_total: int = 0
+    hud_band_history: list[tuple[float, float]] = field(default_factory=list)
     field_rejected_total: int = 0
     debug_filters: bool = False
     bbox_smoother: dict = field(default_factory=dict)
@@ -346,6 +349,8 @@ def process_video_frame(
     frame: np.ndarray, ctx: VideoPipelineContext
 ) -> tuple[list[dict], dict[int, int] | None]:
     """Run detection (+ optional team labels) for one frame. Mutates ctx."""
+    if ctx.frame_idx == 0:
+        get_reassociator().reset()
     ctx.field_hsv_updated_this_frame = False
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -376,7 +381,9 @@ def process_video_frame(
             ctx.camera_cut_streak = 0
             ctx.camera_cut_cooldown = POST_CUT_FRAMES
             _reset_tracker(ctx.model)
+            get_reassociator().reset()
             ctx.bbox_smoother.clear()
+            ctx.hud_band_history.clear()
             if ctx.classifier is not None:
                 ctx.classifier.post_cut_frames = POST_CUT_FRAMES
                 if ctx.classifier.state != FootballTeamClassifier.STATE_LOCKED:
@@ -384,6 +391,15 @@ def process_video_frame(
                     ctx.auto_frames.clear()
 
     field_mask = _update_field_mask(frame, ctx, hsv)
+
+    hud_band = None
+    if ctx.apply_hud_filter:
+        raw_top, raw_bottom = _hud_limits(frame.shape, field_mask=field_mask)
+        recent = ctx.hud_band_history[-(HUD_BAND_HOLD_FRAMES - 1) :]
+        hud_band = hold_hud_band_limits(raw_top, raw_bottom, recent)
+        ctx.hud_band_history.append((raw_top, raw_bottom))
+        if len(ctx.hud_band_history) > HUD_BAND_HOLD_FRAMES:
+            ctx.hud_band_history = ctx.hud_band_history[-HUD_BAND_HOLD_FRAMES:]
 
     run_yolo = ctx.detect_every <= 1 or ctx.frame_idx % ctx.detect_every == 0
     cur_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -404,8 +420,10 @@ def process_video_frame(
             player_half=ctx.player_half,
             player_device=ctx.player_device,
             field_mask=field_mask,
+            hud_band=hud_band,
         )
         detections = suppress_duplicate_tracks(detections)
+        detections = get_reassociator().apply(frame, detections, ctx.frame_idx)
         _attach_pose(frame, ctx, detections)
         detections = [{**d, "frame_age": 0} for d in detections]
         ctx.last_detections = detections

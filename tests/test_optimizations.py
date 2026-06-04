@@ -45,7 +45,7 @@ from src.mask_utils import (
     mask_area,
 )
 from src.pipeline import VideoPipelineContext
-from src.post_process import filter_hud_detections
+from src.post_process import filter_hud_detections, hold_hud_band_limits
 from src.team_classifier import (
     FootballTeamClassifier,
     TemporalVoter,
@@ -437,6 +437,60 @@ def test_adaptive_hud_filter_uses_field_mask():
     assert kept_xyxy.shape[0] >= 1
     assert 3 in kept_ids.tolist()
     assert 1 not in kept_ids.tolist()
+
+
+def test_hud_filter_foot_rescue_keeps_field_straddlers():
+    # Center-y sits above the band (HUD overlay) but feet overlap playable mask.
+    xyxy = np.array([[0, 35, 10, 55]], dtype=float)
+    confs = np.array([0.9], dtype=float)
+    tids = np.array([1], dtype=int)
+    field_mask = np.zeros((100, 20), dtype=np.uint8)
+    field_mask[45:60, :] = 255
+    kept_xyxy, kept_confs, kept_ids, _ = filter_hud_detections(
+        (100, 20, 3),
+        xyxy,
+        confs,
+        tids,
+        field_mask=field_mask,
+        foot_min_frac=0.10,
+    )
+    assert kept_xyxy.shape[0] == 1
+    assert kept_ids.tolist() == [1]
+
+
+def test_hud_filter_foot_rescue_off_when_no_field_mask():
+    xyxy = np.array([[0, 5, 10, 15]], dtype=float)
+    confs = np.array([0.9], dtype=float)
+    tids = np.array([1], dtype=int)
+    kept_xyxy, _, kept_ids, _ = filter_hud_detections(
+        (100, 20, 3),
+        xyxy,
+        confs,
+        tids,
+        field_mask=None,
+    )
+    assert kept_xyxy.shape[0] == 0
+    assert len(kept_ids) == 0
+
+
+def test_hold_hud_band_limits_widens_from_history():
+    held = hold_hud_band_limits(100.0, 900.0, [(80.0, 920.0), (90.0, 910.0)])
+    assert held == (80.0, 920.0)
+
+
+def test_hud_filter_uses_explicit_band():
+    xyxy = np.array([[0, 95, 10, 105]], dtype=float)
+    confs = np.array([0.9], dtype=float)
+    tids = np.array([1], dtype=int)
+    kept_xyxy, _, kept_ids, _ = filter_hud_detections(
+        (200, 20, 3),
+        xyxy,
+        confs,
+        tids,
+        hud_band=(0.0, 200.0),
+    )
+    assert kept_xyxy.shape[0] == 1
+    assert kept_ids.tolist() == [1]
 
 
 def test_helmet_every_reuses_cached_detections():
@@ -1081,6 +1135,10 @@ if __name__ == "__main__":
     test_field_overlap_gate()
     test_helmet_confirmed_relaxes_warmup_gate()
     test_adaptive_hud_filter_uses_field_mask()
+    test_hud_filter_foot_rescue_keeps_field_straddlers()
+    test_hud_filter_foot_rescue_off_when_no_field_mask()
+    test_hold_hud_band_limits_widens_from_history()
+    test_hud_filter_uses_explicit_band()
     test_helmet_every_reuses_cached_detections()
     test_warmup_per_track_cap()
     test_quality_eviction_drops_worst()

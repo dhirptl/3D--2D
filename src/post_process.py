@@ -10,6 +10,7 @@ from src.config import (
     HUD_BOTTOM_PCT,
     HUD_FIELD_BOTTOM_MARGIN_PX,
     HUD_FIELD_TOP_MARGIN_PX,
+    HUD_FOOT_MIN_FRAC,
     HUD_TOP_PCT,
     YARD_LINE_SAT_MAX,
     YARD_LINE_VAL_MIN,
@@ -59,14 +60,62 @@ def _hud_limits(frame_shape, field_mask: np.ndarray | None = None) -> tuple[floa
     return top_limit, bottom_limit
 
 
-def filter_hud_detections(frame_shape, xyxy, confs, track_ids, *, field_mask: np.ndarray | None = None):
+def hold_hud_band_limits(
+    top: float,
+    bottom: float,
+    history: list[tuple[float, float]],
+) -> tuple[float, float]:
+    """Widen the band using recent raw limits; never tighter than this frame."""
+    window = history + [(top, bottom)]
+    return min(t for t, _ in window), max(b for _, b in window)
+
+
+def _foot_field_fraction(
+    box,
+    mask: np.ndarray,
+    fh: int,
+    fw: int,
+) -> float:
+    x1, y1, x2, y2 = map(int, box)
+    box_h = max(1, y2 - y1)
+    bottom_y1 = int(y2 - (box_h * 0.15))
+    foot_region = mask[
+        max(0, bottom_y1) : min(fh, y2),
+        max(0, x1) : min(fw, x2),
+    ]
+    if foot_region.size == 0:
+        return 0.0
+    return float(np.count_nonzero(foot_region) / foot_region.size)
+
+
+def filter_hud_detections(
+    frame_shape,
+    xyxy,
+    confs,
+    track_ids,
+    *,
+    field_mask: np.ndarray | None = None,
+    foot_min_frac: float | None = None,
+    hud_band: tuple[float, float] | None = None,
+):
     if len(xyxy) == 0:
         empty = np.array([], dtype=int)
         return np.empty((0, 4)), np.array([]), empty, empty
 
-    top_limit, bottom_limit = _hud_limits(frame_shape, field_mask=field_mask)
+    if hud_band is not None:
+        top_limit, bottom_limit = hud_band
+    else:
+        top_limit, bottom_limit = _hud_limits(frame_shape, field_mask=field_mask)
     cy = (xyxy[:, 1] + xyxy[:, 3]) / 2
     keep = (cy > top_limit) & (cy < bottom_limit)
+    min_frac = HUD_FOOT_MIN_FRAC if foot_min_frac is None else foot_min_frac
+    if field_mask is not None and field_mask.any() and min_frac > 0:
+        fh, fw = frame_shape[0], frame_shape[1]
+        foot_keep = np.array(
+            [_foot_field_fraction(box, field_mask, fh, fw) > min_frac for box in xyxy],
+            dtype=bool,
+        )
+        keep = keep | foot_keep
     if not np.any(keep):
         empty = np.array([], dtype=int)
         return np.empty((0, 4)), np.array([]), empty, empty
@@ -120,14 +169,7 @@ def filter_by_field_area(
     fh, fw = frame.shape[:2]
     keep = []
     for i, box in enumerate(xyxy):
-        x1, y1, x2, y2 = map(int, box)
-        box_h = y2 - y1
-        bottom_y1 = int(y2 - (box_h * 0.15))
-        foot_region = mask[
-            max(0, bottom_y1) : min(fh, y2),
-            max(0, x1) : min(fw, x2),
-        ]
-        if foot_region.size > 0 and (np.count_nonzero(foot_region) / foot_region.size) > min_field_frac:
+        if _foot_field_fraction(box, mask, fh, fw) > min_field_frac:
             keep.append(i)
     if not keep:
         empty = np.array([], dtype=int)
