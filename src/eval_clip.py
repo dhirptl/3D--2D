@@ -5,7 +5,7 @@ import csv
 import os
 import pickle
 import tempfile
-from collections import Counter
+from collections import Counter  # noqa: F401 — used in report decomposed metrics
 from pathlib import Path
 
 import cv2
@@ -37,8 +37,10 @@ from src.config import (
 from src.mask_utils import iou_matrix_xyxy
 from src.pipeline import VideoPipelineContext, process_video_frame
 from src.team_classifier import FootballTeamClassifier
+from src.eval_report_schema import validate_report_schema
 from src.zerodet_metrics import (
     decomposed_rates,
+    design_bucket_rates,
     load_zerodet_jsonl,
     pipeline_buckets,
     adjusted_zero_det_rate,
@@ -363,6 +365,14 @@ def eval_clip(
             buckets, frame_idx, exclude_raw0=True, exclude_sparse=True
         )
         report["zerodet_jsonl"] = str(zerodet_path)
+    else:
+        empty = Counter()
+        report.update(design_bucket_rates(empty, frame_idx))
+    missing = validate_report_schema(report)
+    if missing and zerodet_path is None:
+        for k in missing:
+            if k.endswith("_rate") and "model_miss" in k:
+                report.setdefault(k, 0.0)
     return report
 
 

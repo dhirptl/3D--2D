@@ -217,7 +217,7 @@ def extract_tracked_detections(
     if masks_missing:
         if stats:
             stats.missing_mask_warnings += 1
-        logger.warning("frame %d: boxes present but masks is None; using bbox fallback", frame_idx)
+        logger.debug("frame %d: no masks (detection model); using bbox fallback", frame_idx)
 
     xyxy = orig_xyxy
     hud_idx = np.arange(len(orig_xyxy))

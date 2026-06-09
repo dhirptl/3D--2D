@@ -1,0 +1,10 @@
+train:
+  - ../../Football Videos-2/train/images
+  - ../../data/motaf/train/images
+
+val:
+  - ../../Football Videos-2/valid/images
+  - ../../data/motaf/val/images
+
+nc: 3
+names: ['player', 'referee', 'ball']

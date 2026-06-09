@@ -1,10 +1,9 @@
-# Segmentation model training configuration
-# Used by train.py, which passes these values to src.train_football_seg.train()
-# All values here mirror the defaults in src/train_football_seg.py + src/train_common.py
+# Detection model training configuration
+# Used by train.py
 
-model_name: yolo11s-seg.pt      # base model (SEG_TRAIN_MODEL)
-data: null                       # null = use SEG_DATASET_YAML from config.py
-name: run_opt                    # output run name under football_tracker_seg/
+model_name: yolo11m.pt
+data: data/combined_dataset/data.yaml
+name: run_v1_fv2_motaf
 
 epochs: 100
 batch: 8
@@ -13,7 +12,7 @@ device: mps
 freeze: 10
 patience: 40
 
-# Augmentation (from base_train_kwargs)
+# Augmentation
 mosaic: 1.0
 mixup: 0.15
 fliplr: 0.5
@@ -21,12 +20,3 @@ hsv_h: 0.015
 hsv_s: 0.7
 scale: 0.7
 translate: 0.1
-
-# Seg-specific augmentation
-degrees: 5.0         # SEG_TRAIN_DEGREES
-erasing: 0.3         # SEG_TRAIN_ERASING
-copy_paste: 0.4      # SEG_TRAIN_COPY_PASTE
-close_mosaic: 20     # SEG_CLOSE_MOSAIC
-
-# Seg-specific training
-mask_ratio: 4        # SEG_MASK_RATIO

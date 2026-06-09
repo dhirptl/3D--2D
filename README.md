@@ -220,7 +220,8 @@ python -m src.generate_seg_labels
 ## Tests
 
 ```bash
-python tests/test_optimizations.py
+pytest tests/ -m "not slow" -q
+# legacy: python tests/test_optimizations.py
 ```
 
 ## Models

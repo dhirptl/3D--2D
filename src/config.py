@@ -4,10 +4,17 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # --- Detection / tracking ---
 PLAYER_CLASS_ID = 0
+REFEREE_CLASS_ID = 1
+BALL_CLASS_ID = 2
 PLAYER_IMGSZ = 1280
 PLAYER_PREDICT_CONF = 0.10
 PLAYER_PREDICT_IOU = 0.45
 PLAYER_PREDICT_MAX_DET = 100
+# Sentinel when ByteTrack has not assigned an ID (DESIGN §4.1.1 decouple det/track)
+UNTRACKED_TRACK_ID = -1
+# Tracker init aligned with detector floor (DESIGN §4.1.2; tune from measure_distributions.py)
+TRACKER_NEW_TRACK_THRESH = 0.12
+TRACKER_HIGH_THRESH = 0.12
 
 HUD_TOP_PCT = 0.10
 HUD_BOTTOM_PCT = 0.15
@@ -31,39 +38,12 @@ YARD_LINE_VAL_MIN = 180
 UPPER_BODY_FRAC = 0.30
 MIN_COLOR_PIXELS = 10
 MIN_UPPER_MASK_PIXELS = 50
-
-# Detection model (legacy bbox)
-MODEL_PATH = ROOT / "football_tracker" / "run_v1" / "weights" / "best.pt"
-
-# Segmentation model (primary)
-SEG_MODEL_PATH = ROOT / "football_tracker_seg" / "run_v3-4_hardneg" / "weights" / "best.pt"
-SEG_BBOX_SOURCE_ROOT = ROOT / "merged_football_dataset_v2"
-SEG_DATASET_ROOT = ROOT / "merged_football_dataset_v2_seg"
-SEG_DATASET_YAML = SEG_DATASET_ROOT / "data.yaml"
-SEG_TRAIN_MODEL = "yolo11s-seg.pt"
-SEG_MASK_RATIO = 4
-SEG_TRAIN_DEGREES = 5.0
-SEG_TRAIN_ERASING = 0.3
-SEG_TRAIN_COPY_PASTE = 0.4
-SEG_CLOSE_MOSAIC = 20
-
-DATASET_YAML = ROOT / "football_dataset" / "data.yaml"
-HELMET_DATASET_YAML = ROOT / "football_dataset_helmet" / "data.yaml"
-HELMET_MODEL_PATH = ROOT / "football_tracker_helmet" / "run_v1" / "weights" / "best.pt"
-
-# --- SAM label generation ---
-SAM_MODEL = "sam_l.pt"
 MASK_MIN_AREA_FLOOR = 400
-MASK_MIN_AREA_BOX_FRAC = 0.20
-MASK_MIN_BOX_IOU = 0.65
-MASK_BOX_PAD_FRAC = 0.05
-MASK_PREVIEW_COUNT = 50
 
-# Gate 2 seg validation targets
-GATE2_MASK_MAP50 = 0.75
-GATE2_MASK_RECALL = 0.70
-GATE2_MASK_MAP75 = 0.55
-GATE2_BOX_RECALL = 0.75
+# Detection model
+MODEL_PATH = ROOT / "football_tracker" / "run_v1_fv2_motaf" / "weights" / "best.pt"
+
+DATASET_YAML = ROOT / "data" / "combined_dataset" / "data.yaml"
 
 # Clip evaluation north-star targets
 EVAL_MIN_AVG_DETECTIONS = 18.0
@@ -74,6 +54,8 @@ EVAL_MAX_LABEL_FLIP_RATE = 0.10
 EVAL_MAX_LOCKED_FRAME = 900
 EVAL_MIN_TEAM_ACCURACY_PCT = 90.0
 EVAL_MAX_TRACK_ID_CHANGE_RATE = 0.40
+# Team lock quality (DESIGN §6.1.4)
+TEAM_MIN_SILHOUETTE = 0.15
 
 # --- Team classification (TDD Part 9) ---
 WARMUP_CONF_MIN = 0.45
@@ -151,17 +133,6 @@ SPATIAL_MAX_SPREAD_FRAC = 0.60
 POSE_MODEL_PATH = ROOT / "yolo11n-pose.pt"
 POSE_EVERY_DEFAULT = 2
 POSE_IOU_MATCH = 0.5
-
-# Helmet verification
-HELMET_CONF = 0.20
-HELMET_HEAD_IOU = 0.12
-HEAD_ROI_FRAC = 0.28
-HELMET_EVERY_DEFAULT = 4
-HELMET_GATE_WINDOW = 10
-HELMET_GATE_REQUIRED = 1
-HELMET_GATE_GRACE = 15
-HELMET_GATE_SOFT_LOCK_STREAK = 7
-HELMET_GATE_LOCKED_REQUIRED = 1
 
 # Tracker (default ByteTrack; BoT-SORT available via --tracker botsort)
 BOTSORT_CFG = ROOT / "configs" / "botsort.yaml"

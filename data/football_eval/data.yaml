@@ -1,7 +1,0 @@
-path: /Users/dhirpatel/3D->2D /data/football_eval
-train: test/images
-val: test/images
-test: test/images
-nc: 1
-names:
-- Player

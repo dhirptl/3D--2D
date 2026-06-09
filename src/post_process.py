@@ -97,6 +97,7 @@ def filter_hud_detections(
     field_mask: np.ndarray | None = None,
     foot_min_frac: float | None = None,
     hud_band: tuple[float, float] | None = None,
+    fail_open: bool = True,
 ):
     if len(xyxy) == 0:
         empty = np.array([], dtype=int)
@@ -117,6 +118,10 @@ def filter_hud_detections(
         )
         keep = keep | foot_keep
     if not np.any(keep):
+        if fail_open and len(xyxy) > 0:
+            idx = np.arange(len(xyxy))
+            tids = track_ids if track_ids is not None and len(track_ids) else None
+            return xyxy, confs, tids, idx
         empty = np.array([], dtype=int)
         return np.empty((0, 4)), np.array([]), empty, empty
     idx = np.where(keep)[0]
