@@ -272,3 +272,39 @@ def preprocess_hsv_v_clahe(player_bgr: np.ndarray) -> np.ndarray:
     h_ch, s_ch, v_ch = cv2.split(hsv)
     v_enhanced = _CLAHE.apply(v_ch)
     return cv2.merge([h_ch, s_ch, v_enhanced])
+
+
+_SKIN_HSV_LOW = np.array([0, 20, 50], dtype=np.uint8)
+_SKIN_HSV_HIGH = np.array([25, 180, 255], dtype=np.uint8)
+
+
+def dominant_jersey_lab_ab(
+    player_bgr: np.ndarray,
+    torso_mask: np.ndarray,
+    *,
+    k: int = 3,
+) -> tuple[float, float] | None:
+    """Per-crop k-means; pick dominant non-skin cluster (DESIGN §6.2.3)."""
+    masked = torso_mask > 0
+    if masked.sum() < MIN_COLOR_PIXELS:
+        return None
+    lab = cv2.cvtColor(player_bgr, cv2.COLOR_BGR2LAB)
+    hsv = cv2.cvtColor(player_bgr, cv2.COLOR_BGR2HSV)
+    px_lab = lab[masked].astype(np.float32)
+    px_hsv = hsv[masked]
+    skin = cv2.inRange(px_hsv.reshape(-1, 1, 3), _SKIN_HSV_LOW, _SKIN_HSV_HIGH).ravel() > 0
+    if px_lab.shape[0] < k:
+        return float(px_lab[:, 1].mean()), float(px_lab[:, 2].mean())
+    from sklearn.cluster import KMeans
+
+    km = KMeans(n_clusters=k, n_init=3, random_state=0)
+    km.fit(px_lab[:, 1:3])
+    counts = np.bincount(km.labels_, minlength=k)
+    order = np.argsort(-counts)
+    for idx in order:
+        cluster_pts = px_lab[km.labels_ == idx]
+        cluster_skin = skin[km.labels_ == idx]
+        if cluster_skin.mean() > 0.6:
+            continue
+        return float(cluster_pts[:, 0].mean()), float(cluster_pts[:, 1].mean())
+    return float(px_lab[:, 1].mean()), float(px_lab[:, 2].mean())

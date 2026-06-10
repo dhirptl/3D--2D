@@ -2,8 +2,10 @@
 
 import argparse
 import csv
+import os
 import pickle
-from collections import Counter
+import tempfile
+from collections import Counter  # noqa: F401 — used in report decomposed metrics
 from pathlib import Path
 
 import cv2
@@ -16,6 +18,7 @@ from src.config import (
     EVAL_MAX_LABEL_FLIP_RATE,
     EVAL_MAX_LOCKED_FRAME,
     EVAL_MAX_TRACK_ID_CHANGE_RATE,
+    EVAL_MAX_ACTIONABLE_ZERO_DET_FRAC,
     EVAL_MAX_ZERO_DET_FRAC,
     EVAL_MIN_AVG_DETECTIONS,
     EVAL_MIN_LOCKED_PCT,
@@ -34,6 +37,14 @@ from src.config import (
 from src.mask_utils import iou_matrix_xyxy
 from src.pipeline import VideoPipelineContext, process_video_frame
 from src.team_classifier import FootballTeamClassifier
+from src.eval_report_schema import validate_report_schema
+from src.zerodet_metrics import (
+    decomposed_rates,
+    design_bucket_rates,
+    load_zerodet_jsonl,
+    pipeline_buckets,
+    adjusted_zero_det_rate,
+)
 
 DEFAULT_ANNOTATIONS = ROOT / "annotations" / "sample_labels.csv"
 TEAM_IOU_MATCH_THRESHOLD = 0.3
@@ -114,9 +125,20 @@ def _release_gate(
     require_early_lock: bool,
     gate_mode: str,
     calibration_loaded: bool,
+    use_actionable_zero_det: bool = False,
 ) -> dict[str, bool]:
     ok_dets = report["avg_detections"] >= EVAL_MIN_AVG_DETECTIONS
-    ok_zero = report["zero_det_rate"] <= EVAL_MAX_ZERO_DET_FRAC
+    zero_key = (
+        "actionable_zero_det_rate"
+        if use_actionable_zero_det and "actionable_zero_det_rate" in report
+        else "zero_det_rate"
+    )
+    zero_limit = (
+        EVAL_MAX_ACTIONABLE_ZERO_DET_FRAC
+        if zero_key == "actionable_zero_det_rate"
+        else EVAL_MAX_ZERO_DET_FRAC
+    )
+    ok_zero = report.get(zero_key, report["zero_det_rate"]) <= zero_limit
     ok_locked = (
         report["locked_pct"] >= EVAL_MIN_LOCKED_PCT or report["final_state"] == "LOCKED"
     )
@@ -174,7 +196,15 @@ def eval_clip(
     team_match: str = "track_id",
     debug_filters: bool = False,
     tracker: str = "bytetrack",
+    zerodet_jsonl: Path | None = None,
+    player_device: str | None = None,
 ) -> dict:
+    zerodet_path = zerodet_jsonl
+    if zerodet_path is not None:
+        zerodet_path.parent.mkdir(parents=True, exist_ok=True)
+        os.environ["ZERODET_DEBUG"] = str(zerodet_path)
+        zerodet_path.write_text("")
+
     weights = model_path or SEG_MODEL_PATH
     if not weights.exists():
         raise FileNotFoundError(f"Seg model not found: {weights}")
@@ -204,6 +234,7 @@ def eval_clip(
         use_helmet_gate=use_helmet_gate,
         helmet_gate_grace=max(0, helmet_gate_grace),
         debug_filters=debug_filters,
+        player_device=player_device,
     )
 
     calibration_loaded = False
@@ -323,6 +354,25 @@ def eval_clip(
         "states": dict(state_counts),
         "team_accuracy": team_accuracy,
     }
+    if zerodet_path is not None:
+        by_frame = load_zerodet_jsonl(zerodet_path)
+        buckets = pipeline_buckets(frame_idx, by_frame)
+        report.update(decomposed_rates(buckets, frame_idx))
+        report["zero_det_rate_excl_raw0"] = adjusted_zero_det_rate(
+            buckets, frame_idx, exclude_raw0=True
+        )
+        report["zero_det_rate_excl_raw0_sparse"] = adjusted_zero_det_rate(
+            buckets, frame_idx, exclude_raw0=True, exclude_sparse=True
+        )
+        report["zerodet_jsonl"] = str(zerodet_path)
+    else:
+        empty = Counter()
+        report.update(design_bucket_rates(empty, frame_idx))
+    missing = validate_report_schema(report)
+    if missing and zerodet_path is None:
+        for k in missing:
+            if k.endswith("_rate") and "model_miss" in k:
+                report.setdefault(k, 0.0)
     return report
 
 
@@ -361,6 +411,11 @@ def main() -> None:
     )
     parser.add_argument("--debug-filters", action="store_true")
     parser.add_argument(
+        "--device",
+        default=None,
+        help='Inference device: "auto" (default: MPS > CUDA > CPU), "cpu", "mps", "cuda"',
+    )
+    parser.add_argument(
         "--tracker",
         choices=("botsort", "bytetrack"),
         default="bytetrack",
@@ -371,7 +426,31 @@ def main() -> None:
         default=str(DEFAULT_ANNOTATIONS),
         help="CSV with frame,track_id,correct_team for accuracy",
     )
+    parser.add_argument(
+        "--decomposed-zero-det",
+        action="store_true",
+        help="Emit ZERODET_DEBUG JSONL and report actionable HUD+formation zero-det buckets",
+    )
+    parser.add_argument(
+        "--zerodet-jsonl",
+        default=None,
+        help="Path for ZERODET_DEBUG output (default: temp file when --decomposed-zero-det)",
+    )
+    parser.add_argument(
+        "--gate-actionable-zero-det",
+        action="store_true",
+        help="North-star zero-det gate uses actionable_zero_det_rate (HUD + formation boundary)",
+    )
     args = parser.parse_args()
+
+    zerodet_path: Path | None = None
+    if args.decomposed_zero_det or args.zerodet_jsonl:
+        if args.zerodet_jsonl:
+            zerodet_path = Path(args.zerodet_jsonl)
+        else:
+            fd, tmp = tempfile.mkstemp(suffix=".jsonl")
+            os.close(fd)
+            zerodet_path = Path(tmp)
 
     report = eval_clip(
         args.source,
@@ -392,6 +471,8 @@ def main() -> None:
         team_match=args.team_match,
         debug_filters=args.debug_filters,
         tracker=args.tracker,
+        zerodet_jsonl=zerodet_path,
+        player_device=args.device,
     )
 
     print("--- Clip Evaluation ---")
@@ -404,10 +485,29 @@ def main() -> None:
         require_early_lock=args.require_early_lock,
         gate_mode=args.gate,
         calibration_loaded=bool(args.calibration),
+        use_actionable_zero_det=args.gate_actionable_zero_det,
     )
 
     print(f"  Detection target (avg>={EVAL_MIN_AVG_DETECTIONS:.0f}): {'PASS' if criteria['detections'] else 'FAIL'}")
-    print(f"  Zero-det target (rate<={EVAL_MAX_ZERO_DET_FRAC:.0%}): {'PASS' if criteria['zero_det'] else 'FAIL'}")
+    zero_label = (
+        "actionable zero-det"
+        if args.gate_actionable_zero_det and "actionable_zero_det_rate" in report
+        else "zero-det"
+    )
+    zero_lim = (
+        EVAL_MAX_ACTIONABLE_ZERO_DET_FRAC
+        if args.gate_actionable_zero_det and "actionable_zero_det_rate" in report
+        else EVAL_MAX_ZERO_DET_FRAC
+    )
+    print(f"  {zero_label} target (rate<={zero_lim:.0%}): {'PASS' if criteria['zero_det'] else 'FAIL'}")
+    if "actionable_zero_det_rate" in report:
+        print(f"  Actionable zero-det (HUD+formation): {report['actionable_zero_det_rate']:.1%}")
+        if report.get("zero_det_rate_excl_raw0") is not None:
+            print(f"  Zero-det excl raw=0: {report['zero_det_rate_excl_raw0']:.1%}")
+        if report.get("zero_det_rate_excl_raw0_sparse") is not None:
+            print(
+                f"  Zero-det excl raw=0+sparse: {report['zero_det_rate_excl_raw0_sparse']:.1%}"
+            )
     print(f"  LOCKED target (>={EVAL_MIN_LOCKED_PCT:.0f}% or final LOCKED): {'PASS' if criteria['locked'] else 'FAIL'}")
     print(f"  Label stability target (flip_rate<={EVAL_MAX_LABEL_FLIP_RATE:.2f}): {'PASS' if criteria['label_stability'] else 'FAIL'}")
     print(

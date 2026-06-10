@@ -73,8 +73,14 @@ from src.config import (
     WARMUP_VECTOR_CAP,
     FIELD_REG_TEMPLATE_H,
 )
+from src.config import TEAM_MIN_SILHOUETTE
 from src.field_registration import project_feet_to_field
 from src.mask_utils import mask_area
+from src.team_cluster_utils import (
+    cluster_silhouette,
+    hungarian_relabel_centroids,
+    lock_allowed,
+)
 
 _LAB_NEUTRAL = 128.0
 _FIELD_HUE_REF = (FIELD_HSV_HUE_LOW + FIELD_HSV_HUE_HIGH) / 2.0
@@ -335,6 +341,8 @@ class FootballTeamClassifier:
         self.field_hsv_ready = False
         self.last_frame_debug: dict[int, dict] = {}
         self.locked_frame_index: int | None = None
+        self._track_color_samples: dict[int, list[np.ndarray]] = defaultdict(list)
+        self._track_locked_label: dict[int, int] = {}
 
         self.frames_in_warmup = 0
         self.warmup_min_unique_tracks = WARMUP_MIN_UNIQUE_TRACKS
@@ -528,6 +536,20 @@ class FootballTeamClassifier:
         assert self.centroid_team1 is not None
 
         feat = normalize_features(raw_feat, self.scaler)
+        if track_id in self._track_locked_label:
+            return self._track_locked_label[track_id]
+
+        samples = self._track_color_samples[track_id]
+        samples.append(feat)
+        if len(samples) >= 3:
+            med = np.median(np.stack(samples[-WARMUP_MAX_PER_TRACK:]), axis=0)
+            label, dist0, dist1 = classify_player(
+                med, self.centroid_team0, self.centroid_team1
+            )
+            self._track_locked_label[track_id] = int(label)
+            self.voter.last_label[track_id] = int(label)
+            return self._track_locked_label[track_id]
+
         label, dist0, dist1 = classify_player(
             feat, self.centroid_team0, self.centroid_team1
         )
@@ -858,6 +880,20 @@ class FootballTeamClassifier:
             km.fit(normed, sample_weight=sample_weight)
             c0 = km.cluster_centers_[0]
             c1 = km.cluster_centers_[1]
+            sil = cluster_silhouette(normed, km.labels_)
+            if not lock_allowed(sil, TEAM_MIN_SILHOUETTE):
+                print(
+                    f"[calibrate] silhouette {sil} < {TEAM_MIN_SILHOUETTE}; "
+                    "blocking lock"
+                )
+                self.cal_fail_count += 1
+                self.state = self.STATE_WARMUP
+                return False
+
+            prev = None
+            if self.centroid_team0 is not None and self.centroid_team1 is not None:
+                prev = (self.centroid_team0, self.centroid_team1)
+            c0, c1 = hungarian_relabel_centroids((c0, c1), prev)
             dist = float(np.linalg.norm(c0 - c1))
 
             self.preview_centroids = (c0, c1)

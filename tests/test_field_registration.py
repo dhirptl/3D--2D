@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.field_registration import _projection_is_plausible
+from src.config import FIELD_REG_VALID_STREAK
+from src.field_registration import FieldRegistration, _projection_is_plausible, _yard_match_is_degenerate
 
 # Captured from 1minclip.mov replay (fi 191, area_frac ~1.1e-8): passes inlier/reproj
 # but collapses the field template to a sliver.
@@ -36,3 +37,19 @@ def test_projection_rejects_degenerate_homography() -> None:
 
 def test_projection_accepts_good_homography() -> None:
     assert _projection_is_plausible(GOOD_H, FRAME_H, FRAME_W) is True
+
+
+def test_yard_match_rejects_collinear_points() -> None:
+    collinear = np.array([[100.0, 500.0], [200.0, 510.0], [300.0, 520.0], [400.0, 530.0]])
+    spread = np.array([[100.0, 500.0], [500.0, 520.0], [900.0, 800.0], [200.0, 900.0]])
+    assert _yard_match_is_degenerate(collinear) is True
+    assert _yard_match_is_degenerate(spread) is False
+
+
+def test_invalidate_streak_nulls_homography() -> None:
+    reg = FieldRegistration()
+    reg.homography = np.eye(3, dtype=np.float64)
+    reg.valid_streak = FIELD_REG_VALID_STREAK + 2
+    reg.registration_valid = True
+    reg._invalidate_streak()
+    assert reg.homography is None

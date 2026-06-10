@@ -12,6 +12,7 @@ from src.config import (
     CAMERA_CUT_CONSECUTIVE_FRAMES,
     CAMERA_CUT_MAD_THRESHOLD,
     FIELD_FOOT_MIN_FRAC,
+    PLAYER_DEVICE,
     PLAYER_PREDICT_HALF,
     FIELD_HSV_AUTO_FRAMES,
     FIELD_HSV_BLEND_ALPHA,
@@ -21,15 +22,11 @@ from src.config import (
     FIELD_REG_STABLE_STREAK,
     FIELD_REG_UPDATE_STRIDE_STABLE,
     FIELD_REG_VALID_STREAK,
+    HUD_BAND_HOLD_FRAMES,
     FIELD_ROI_X0_FRAC,
     FIELD_ROI_X1_FRAC,
     FIELD_ROI_Y0_FRAC,
     FIELD_ROI_Y1_FRAC,
-    HELMET_CONF,
-    HELMET_EVERY_DEFAULT,
-    HELMET_GATE_GRACE,
-    HELMET_HEAD_IOU,
-    HELMET_MODEL_PATH,
     PLAYER_IMGSZ,
     PLAYER_PREDICT_CONF,
     PLAYER_PREDICT_IOU,
@@ -40,10 +37,10 @@ from src.config import (
 from src.detection import DetectionStats, extract_tracked_detections
 from src.field_hsv import build_field_mask_from_bounds, estimate_field_hsv, estimate_hsv_from_pixel_arrays
 from src.field_registration import FieldRegistration, center_roi_green_fraction
-from src.helmet_verify import HelmetTrackGate, detect_helmets, detect_helmets_roi, filter_detections_by_helmet
 from src.pose_estimation import attach_keypoints_to_detections, get_pose_model, run_pose_on_frame
-from src.post_process import build_field_mask, filter_by_field_area, suppress_duplicate_tracks
+from src.post_process import build_field_mask, filter_by_field_area, hold_hud_band_limits, suppress_duplicate_tracks, _hud_limits
 from src.team_classifier import FootballTeamClassifier
+from src.track_reassoc import get_reassociator
 
 
 @dataclass
@@ -61,14 +58,9 @@ class VideoPipelineContext:
     player_imgsz: int = PLAYER_IMGSZ
     player_max_det: int = PLAYER_PREDICT_MAX_DET
     player_half: bool = PLAYER_PREDICT_HALF
+    player_device: str | None = None
     pose_every: int = POSE_EVERY_DEFAULT
     use_pose: bool = True
-    require_helmet: bool = True
-    helmet_model_path: Path | None = None
-    helmet_conf: float = HELMET_CONF
-    helmet_every: int = HELMET_EVERY_DEFAULT
-    use_helmet_gate: bool = True
-    helmet_gate_grace: int = HELMET_GATE_GRACE
     field_hsv_bounds: tuple[int, int, int, int] | None = None
     auto_frames: list = field(default_factory=list)
     last_detections: list = field(default_factory=list)
@@ -83,17 +75,12 @@ class VideoPipelineContext:
     registration_valid_frames: int = 0
     hsv_deferred: bool = True
     _pose_model: YOLO | None = None
-    _helmet_model: YOLO | None = None
-    _last_helmets: list = field(default_factory=list)
-    _helmet_cache_frame: int = -1
-    _helmet_gate: HelmetTrackGate | None = None
-    helmet_inference_frames: int = 0
     track_id_changes: int = 0
     prev_track_ids: set[int] = field(default_factory=set)
     camera_cut_cooldown: int = 0
     camera_cut_streak: int = 0
-    helmet_rejected_total: int = 0
     hud_rejected_total: int = 0
+    hud_band_history: list[tuple[float, float]] = field(default_factory=list)
     field_rejected_total: int = 0
     debug_filters: bool = False
     bbox_smoother: dict = field(default_factory=dict)
@@ -227,51 +214,6 @@ def _attach_pose(frame: np.ndarray, ctx: VideoPipelineContext, detections: list[
             print(f"[pose] disabled: {e}")
 
 
-def _helmet_gate(ctx: VideoPipelineContext) -> HelmetTrackGate | None:
-    if not ctx.use_helmet_gate:
-        return None
-    if ctx._helmet_gate is None or ctx._helmet_gate.grace != ctx.helmet_gate_grace:
-        ctx._helmet_gate = HelmetTrackGate(grace=max(0, ctx.helmet_gate_grace))
-    return ctx._helmet_gate
-
-
-def _helmet_model(ctx: VideoPipelineContext) -> YOLO:
-    path = ctx.helmet_model_path or HELMET_MODEL_PATH
-    if ctx._helmet_model is None:
-        ctx._helmet_model = YOLO(str(path))
-    return ctx._helmet_model
-
-
-def _helmet_detections(
-    frame: np.ndarray,
-    ctx: VideoPipelineContext,
-    *,
-    run_yolo: bool,
-    detections: list[dict],
-) -> list[dict]:
-    if not ctx.require_helmet:
-        return []
-
-    run_helmet = run_yolo and ctx.frame_idx % max(1, ctx.helmet_every) == 0
-    if not run_helmet:
-        return ctx._last_helmets
-    if not detections:
-        ctx._last_helmets = []
-        ctx._helmet_cache_frame = ctx.frame_idx
-        return []
-
-    helmets = detect_helmets_roi(
-        _helmet_model(ctx),
-        frame,
-        detections,
-        conf=ctx.helmet_conf,
-    )
-    ctx._last_helmets = helmets
-    ctx._helmet_cache_frame = ctx.frame_idx
-    ctx.helmet_inference_frames += 1
-    return helmets
-
-
 def _cached_team_labels(ctx: VideoPipelineContext, detections: list[dict]) -> dict[int, int]:
     clf = ctx.classifier
     assert clf is not None
@@ -344,6 +286,8 @@ def process_video_frame(
     frame: np.ndarray, ctx: VideoPipelineContext
 ) -> tuple[list[dict], dict[int, int] | None]:
     """Run detection (+ optional team labels) for one frame. Mutates ctx."""
+    if ctx.frame_idx == 0:
+        get_reassociator().reset()
     ctx.field_hsv_updated_this_frame = False
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -374,7 +318,9 @@ def process_video_frame(
             ctx.camera_cut_streak = 0
             ctx.camera_cut_cooldown = POST_CUT_FRAMES
             _reset_tracker(ctx.model)
+            get_reassociator().reset()
             ctx.bbox_smoother.clear()
+            ctx.hud_band_history.clear()
             if ctx.classifier is not None:
                 ctx.classifier.post_cut_frames = POST_CUT_FRAMES
                 if ctx.classifier.state != FootballTeamClassifier.STATE_LOCKED:
@@ -382,6 +328,15 @@ def process_video_frame(
                     ctx.auto_frames.clear()
 
     field_mask = _update_field_mask(frame, ctx, hsv)
+
+    hud_band = None
+    if ctx.apply_hud_filter:
+        raw_top, raw_bottom = _hud_limits(frame.shape, field_mask=field_mask)
+        recent = ctx.hud_band_history[-(HUD_BAND_HOLD_FRAMES - 1) :]
+        hud_band = hold_hud_band_limits(raw_top, raw_bottom, recent)
+        ctx.hud_band_history.append((raw_top, raw_bottom))
+        if len(ctx.hud_band_history) > HUD_BAND_HOLD_FRAMES:
+            ctx.hud_band_history = ctx.hud_band_history[-HUD_BAND_HOLD_FRAMES:]
 
     run_yolo = ctx.detect_every <= 1 or ctx.frame_idx % ctx.detect_every == 0
     cur_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -400,9 +355,12 @@ def process_video_frame(
             player_imgsz=ctx.player_imgsz,
             player_max_det=ctx.player_max_det,
             player_half=ctx.player_half,
+            player_device=ctx.player_device,
             field_mask=field_mask,
+            hud_band=hud_band,
         )
         detections = suppress_duplicate_tracks(detections)
+        detections = get_reassociator().apply(frame, detections, ctx.frame_idx)
         _attach_pose(frame, ctx, detections)
         detections = [{**d, "frame_age": 0} for d in detections]
         ctx.last_detections = detections
@@ -426,22 +384,6 @@ def process_video_frame(
         detections = [d for d in detections if d["track_id"] in keep]
         ctx.field_rejected_total += before - len(detections)
 
-    helmets = _helmet_detections(frame, ctx, run_yolo=run_yolo, detections=detections)
-    update_helmet_gate = ctx._helmet_cache_frame == ctx.frame_idx
-    if ctx.require_helmet and detections:
-        before_helmet = len(detections)
-        detections = filter_detections_by_helmet(
-            detections,
-            helmets,
-            gate=_helmet_gate(ctx),
-            conf_min=ctx.helmet_conf,
-            iou_min=HELMET_HEAD_IOU,
-            update_gate=update_helmet_gate,
-        )
-        ctx.helmet_rejected_total += before_helmet - len(detections)
-    elif ctx.require_helmet and ctx._helmet_gate is not None:
-        ctx._helmet_gate.prune(set())
-
     # EMA bbox smoothing: damp jitter while tracking fast-moving players.
     if BBOX_EMA_ALPHA < 1.0 and detections:
         alive = set()
@@ -461,10 +403,7 @@ def process_video_frame(
                 del ctx.bbox_smoother[tid]
 
     if ctx.debug_filters and ctx.frame_idx > 0 and ctx.frame_idx % 300 == 0:
-        print(
-            f"[filters] frame {ctx.frame_idx}: helmet_rejected={ctx.helmet_rejected_total} "
-            f"field_rejected={ctx.field_rejected_total}"
-        )
+        print(f"[filters] frame {ctx.frame_idx}: field_rejected={ctx.field_rejected_total}")
 
     team_labels = None
     if ctx.classifier is not None:

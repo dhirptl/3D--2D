@@ -48,36 +48,6 @@ def iou_matrix_xyxy(boxes_a: np.ndarray, boxes_b: np.ndarray) -> np.ndarray:
     return np.where(union > 0, inter / union, 0.0).astype(np.float32)
 
 
-def match_indices(filtered_xyxy: np.ndarray, orig_xyxy: np.ndarray) -> list[int]:
-    """Greedy unique assignment: each orig index used at most once."""
-    n_f, n_o = len(filtered_xyxy), len(orig_xyxy)
-    if n_f == 0:
-        return []
-    if n_o == 0:
-        return [0] * n_f
-
-    iou = iou_matrix_xyxy(filtered_xyxy, orig_xyxy)
-    used_orig: set[int] = set()
-    indices: list[int] = []
-    for i in range(n_f):
-        best = int(np.argmax(iou[i]))
-        if best not in used_orig:
-            indices.append(best)
-            used_orig.add(best)
-            continue
-        # Best already taken — fall back to sorted scan
-        order = np.argsort(-iou[i])
-        chosen = int(order[0])
-        for j in order:
-            j = int(j)
-            if j not in used_orig:
-                chosen = j
-                used_orig.add(j)
-                break
-        indices.append(chosen)
-    return indices
-
-
 def mask_to_full_frame(mask_tensor, shape_hw: tuple[int, int]) -> np.ndarray:
     h, w = shape_hw
     m = mask_tensor.cpu().numpy()

@@ -17,10 +17,7 @@ from src.config import (
     CALIBRATION_VERSION,
     DEBUG_CROP_DIR,
     DETECT_EVERY_DEFAULT,
-    HELMET_CONF,
-    HELMET_EVERY_DEFAULT,
-    HELMET_GATE_GRACE,
-    HELMET_MODEL_PATH,
+    MODEL_PATH,
     PIPELINE_THREADS_DEFAULT,
     PLAYER_CLASS_ID,
     PLAYER_IMGSZ,
@@ -32,14 +29,10 @@ from src.config import (
     RETINA_BENCHMARK_FRAMES,
     RETINA_MAX_MS_PER_FRAME,
     ROOT as CONFIG_ROOT,
-    SEG_MODEL_PATH,
 )
 from src.detection import DetectionStats, extract_tracked_detections
 from src.draw import draw_teams
 from src.mask_utils import mask_area
-from src.pass1_perception import run_pass1
-from src.pass1_quality_gate import evaluate_ir
-from src.pass2_analysis import run_pass2
 from src.pipeline import VideoPipelineContext, process_video_frame
 from src.team_classifier import FootballTeamClassifier
 from src.video_pipeline import run_with_read_ahead
@@ -90,68 +83,20 @@ def run(
     tracker: str = "bytetrack",
     pose_every: int = POSE_EVERY_DEFAULT,
     no_pose: bool = False,
-    require_helmet: bool = True,
-    helmet_model_path: Path | None = None,
-    helmet_conf: float = HELMET_CONF,
-    helmet_every: int = HELMET_EVERY_DEFAULT,
-    use_helmet_gate: bool = True,
-    helmet_gate_grace: int = HELMET_GATE_GRACE,
     player_conf: float = PLAYER_PREDICT_CONF,
     player_iou: float = PLAYER_PREDICT_IOU,
     player_imgsz: int = PLAYER_IMGSZ,
     player_max_det: int = PLAYER_PREDICT_MAX_DET,
     player_half: bool = PLAYER_PREDICT_HALF,
-    offline_pass2: bool = False,
-    offline_out_dir: str | None = None,
-    homography_json: str | None = None,
-    annotations_csv: str | None = None,
-    no_pass1_gate: bool = False,
+    player_device: str | None = None,
     save_kmeans_crops: bool = False,
     debug_crops_dir: str | None = None,
     debug_crops_max_frames: int | None = None,
 ) -> None:
-    if offline_pass2:
-        out_dir = Path(offline_out_dir) if offline_out_dir else (CONFIG_ROOT / "outputs" / "pass2")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        ir_path = out_dir / f"{Path(source).stem}_pass1.parquet"
-        run_pass1(
-            Path(source),
-            ir_path,
-            model_path=model_path or SEG_MODEL_PATH,
-            player_conf=player_conf,
-            player_iou=player_iou,
-            player_imgsz=player_imgsz,
-            player_max_det=player_max_det,
-            helmet_model=helmet_model_path if require_helmet else None,
-        )
-        gate_result = evaluate_ir(ir_path)
-        print(f"Pass1 quality gate: {gate_result}")
-        if not gate_result["pass"] and not no_pass1_gate:
-            raise RuntimeError(
-                f"Pass1 quality gate failed: {gate_result.get('reason') or gate_result.get('checks')}. "
-                "Use --no-pass1-gate to skip."
-            )
-        metrics = run_pass2(
-            ir_path,
-            out_dir,
-            homography_json=Path(homography_json) if homography_json else None,
-            source_clip=Path(source),
-            annotations_csv=Path(annotations_csv) if annotations_csv else None,
-        )
-        print(f"Offline Pass2 complete. Metrics: {metrics}")
-        return
-
-    weights = model_path or SEG_MODEL_PATH
+    weights = model_path or MODEL_PATH
     if not weights.exists():
         raise FileNotFoundError(
-            f"Seg model not found: {weights}. Train: python -m src.train_football_seg"
-        )
-    helmet_weights = helmet_model_path or HELMET_MODEL_PATH
-    if require_helmet and not helmet_weights.exists():
-        raise FileNotFoundError(
-            "Helmet model not found: "
-            f"{helmet_weights}. Run: python -m src.prepare_helmet_dataset "
-            "&& python -m src.train_helmet_detector"
+            f"Detection model not found: {weights}. Train: python train.py"
         )
 
     model = YOLO(str(weights))
@@ -183,14 +128,9 @@ def run(
         player_imgsz=max(64, int(player_imgsz)),
         player_max_det=max(1, int(player_max_det)),
         player_half=player_half,
+        player_device=player_device,
         pose_every=max(1, pose_every),
         use_pose=not no_pose,
-        require_helmet=require_helmet,
-        helmet_model_path=helmet_weights,
-        helmet_conf=helmet_conf,
-        helmet_every=max(1, int(helmet_every)),
-        use_helmet_gate=use_helmet_gate,
-        helmet_gate_grace=max(0, helmet_gate_grace),
         debug_filters=debug_filters,
     )
     team_state_counts: Counter = Counter()
@@ -349,7 +289,6 @@ def run(
     if elapsed_s > 0:
         print(f"Elapsed seconds: {elapsed_s:.2f}")
         print(f"Effective FPS: {frame_idx / elapsed_s:.2f}")
-    print(f"Helmet inference frames: {ctx.helmet_inference_frames}")
     if total_frames:
         print(f"Track ID change rate: {ctx.track_id_changes / total_frames:.4f}")
         print(f"Registration valid frames: {100 * ctx.registration_valid_frames / total_frames:.1f}%")
@@ -442,6 +381,11 @@ def main() -> None:
         help="Use FP16 half-precision inference (large speedup on CUDA; variable on MPS)",
     )
     parser.add_argument(
+        "--device",
+        default=None,
+        help='Inference device: "auto" (default: MPS > CUDA > CPU), "cpu", "mps", "cuda"',
+    )
+    parser.add_argument(
         "--pose-every",
         type=int,
         default=POSE_EVERY_DEFAULT,
@@ -456,64 +400,6 @@ def main() -> None:
         "--force-retina",
         action="store_true",
         help="Keep retina_masks even if benchmark is slow",
-    )
-    parser.add_argument(
-        "--no-helmet",
-        action="store_true",
-        help="Disable helmet verification (allows sideline staff through)",
-    )
-    parser.add_argument(
-        "--helmet-model",
-        default=None,
-        help="Override helmet detector weights path",
-    )
-    parser.add_argument(
-        "--helmet-conf",
-        type=float,
-        default=HELMET_CONF,
-        help="Helmet detector confidence threshold",
-    )
-    parser.add_argument(
-        "--helmet-every",
-        type=int,
-        default=HELMET_EVERY_DEFAULT,
-        help="Run helmet verification every N detection frames",
-    )
-    parser.add_argument(
-        "--no-helmet-gate",
-        action="store_true",
-        help="Disable temporal smoothing for helmet verification",
-    )
-    parser.add_argument(
-        "--helmet-gate-grace",
-        type=int,
-        default=HELMET_GATE_GRACE,
-        help="Allow this many initial frames before helmet confirmation is required",
-    )
-    parser.add_argument(
-        "--offline-pass2",
-        action="store_true",
-        help="Run Pass1/Pass2 offline pipeline instead of online tracker video rendering",
-    )
-    parser.add_argument(
-        "--offline-out-dir",
-        default=None,
-        help="Output directory for offline pass1/pass2 artifacts",
-    )
-    parser.add_argument(
-        "--homography-json",
-        default=None,
-        help="Optional manual homography JSON for Pass2 route projection",
-    )
-    parser.add_argument(
-        "--annotations-csv",
-        default=None,
-        help="Optional annotation CSV for Pass2 route metrics",
-    )
-    parser.add_argument(
-        "--no-pass1-gate",
-        action="store_true",
-        help="Skip the Pass1 quality gate (allows experimental runs to proceed to Pass2)",
     )
     parser.add_argument(
         "--save-kmeans-crops",
@@ -556,22 +442,12 @@ def main() -> None:
         tracker=args.tracker,
         pose_every=args.pose_every,
         no_pose=args.no_pose,
-        require_helmet=not args.no_helmet,
-        helmet_model_path=Path(args.helmet_model) if args.helmet_model else None,
-        helmet_conf=args.helmet_conf,
-        helmet_every=args.helmet_every,
-        use_helmet_gate=not args.no_helmet_gate,
-        helmet_gate_grace=args.helmet_gate_grace,
         player_conf=args.player_conf,
         player_iou=args.player_iou,
         player_imgsz=args.player_imgsz,
         player_max_det=args.player_max_det,
         player_half=args.half,
-        offline_pass2=args.offline_pass2,
-        offline_out_dir=args.offline_out_dir,
-        homography_json=args.homography_json,
-        annotations_csv=args.annotations_csv,
-        no_pass1_gate=args.no_pass1_gate,
+        player_device=args.device,
         save_kmeans_crops=args.save_kmeans_crops,
         debug_crops_dir=args.debug_crops_dir,
         debug_crops_max_frames=args.debug_crops_max_frames,

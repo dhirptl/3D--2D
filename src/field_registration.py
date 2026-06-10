@@ -1,5 +1,7 @@
 """Homography-based playable-area mask from yard-line detection."""
 
+import os
+
 import cv2
 import numpy as np
 
@@ -26,6 +28,7 @@ from src.config import (
 _TEMPLATE_W = FIELD_REG_TEMPLATE_W
 _TEMPLATE_H = FIELD_REG_TEMPLATE_H
 _HOUGH_MAX_W = 640  # downsample width before Canny+Hough for speed
+_YARD_LINE_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
 
 
 def _yard_line_mask(frame: np.ndarray, hsv: np.ndarray | None = None) -> np.ndarray:
@@ -34,8 +37,7 @@ def _yard_line_mask(frame: np.ndarray, hsv: np.ndarray | None = None) -> np.ndar
     line_lower = np.array([0, 0, YARD_LINE_VAL_MIN])
     line_upper = np.array([179, YARD_LINE_SAT_MAX, 255])
     lines = cv2.inRange(hsv, line_lower, line_upper)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    return cv2.morphologyEx(lines, cv2.MORPH_CLOSE, kernel)
+    return cv2.morphologyEx(lines, cv2.MORPH_CLOSE, _YARD_LINE_KERNEL)
 
 
 def _detect_line_segments(
@@ -160,6 +162,22 @@ def _match_points(
     return np.array(src_pts, dtype=np.float32), np.array(dst_pts, dtype=np.float32)
 
 
+def _yard_match_is_degenerate(src: np.ndarray, min_spread_ratio: float = 0.02) -> bool:
+    """True when matched yard-line points are nearly collinear (unstable homography)."""
+    if len(src) < FIELD_REG_MIN_INLIERS:
+        return True
+    centered = src - src.mean(axis=0)
+    if centered.shape[0] < 3:
+        return True
+    try:
+        _, singular, _ = np.linalg.svd(centered, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return True
+    if singular[0] < 1e-6:
+        return True
+    return float(singular[-1] / singular[0]) < min_spread_ratio
+
+
 def _field_template_polygon() -> np.ndarray:
     """Playable rectangle on template (full field including end zones)."""
     return np.array([
@@ -273,7 +291,7 @@ class FieldRegistration:
         horiz, vert = _classify_segments(segments)
         src, dst = _match_points(horiz, vert, fh, fw)
 
-        if len(src) < FIELD_REG_MIN_INLIERS:
+        if len(src) < FIELD_REG_MIN_INLIERS or _yard_match_is_degenerate(src):
             self._invalidate_streak()
             return False
 
@@ -291,7 +309,9 @@ class FieldRegistration:
             self._invalidate_streak()
             return False
 
-        if not _projection_is_plausible(H, fh, fw):
+        if not os.environ.get("FIELD_REG_DISABLE_PROJ_GUARD") and not _projection_is_plausible(
+            H, fh, fw
+        ):
             self._invalidate_streak()
             return False
 
@@ -305,6 +325,7 @@ class FieldRegistration:
 
     def _invalidate_streak(self) -> None:
         self.valid_streak = max(0, self.valid_streak - 1)
+        self.homography = None
         if self.valid_streak < FIELD_REG_VALID_STREAK:
             self.homography_stale = True
             self.registration_valid = False

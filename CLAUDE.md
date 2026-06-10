@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Field registration — investigation context
+
+- area_frac guard in field_registration.py is intentional — do not remove
+- FIELD_REG_DISABLE_PROJ_GUARD=1 exists for replay scripts only
+- zerodet_decompose.py at repo root is the canonical diagnostic tool
+- Branch: zerodet-instrumentation — keep commits focused and atomic
+- IMPORTANT: measure before implementing. Every threshold needs a distribution analysis before a number is chosen.
+
 ## Coding Guidelines
 
 These guidelines, derived from [Andrej Karpathy's observations](https://x.com/karpathy/status/2015883857489522876), help reduce common LLM coding mistakes.
