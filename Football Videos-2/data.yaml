@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 6
+names: ['ball', 'player', 'players', 'referee', 'team_A', 'team_B']
+
+roboflow:
+  workspace: football-plays-zhr0k
+  project: football-plays-zhr0k
+  version: dataset
+  license: Private
+  url: https://app.roboflow.com/football-plays-zhr0k/football-plays-zhr0k/dataset
